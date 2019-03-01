@@ -3,7 +3,6 @@ var pull = require('pull-stream')
 var Notify = require('pull-notify')
 var valid = require('muxrpc-validation')({})
 
-var u = require('./util')
 var ref = require('ssb-ref')
 var ping = require('pull-ping')
 var stats = require('statistics')
@@ -149,9 +148,7 @@ module.exports = {
     var peers = []
 
     function getPeer(id) {
-      return u.find(peers, function (e) {
-        return e && e.key === id
-      })
+      return peers.find(function (e) { return e && e.key === id })
     }
 
     function simplify (peer) {
