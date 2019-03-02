@@ -4,7 +4,7 @@ var ref       = require('ssb-ref')
 var isArray = Array.isArray
 
 var createSsbServer = require('ssb-server')
-  .use(require('..'))
+  .use(require('../lib'))
 
 var ssbServer = createSsbServer({
   temp: 'gossip',

@@ -3,6 +3,7 @@
   "description": "Legacy SSB plugin for connections, also known as gossip plugin",
   "version": "1.0.2",
   "homepage": "https://github.com/staltz/ssb-legacy-conn",
+  "main": "lib/index.js",
   "repository": {
     "type": "git",
     "url": "git://github.com/staltz/ssb-legacy-conn.git"
@@ -23,12 +24,16 @@
     "statistics": "^3.3.0"
   },
   "devDependencies": {
+    "@types/node": "^11.10.4",
     "cont": "^1.0.3",
     "ssb-server": "^13.5.2",
-    "tape": "^4.9.2"
+    "tape": "^4.9.2",
+    "typescript": "3.3.x"
   },
   "scripts": {
-    "test": "set -e; for t in test/*.js; do node $t; done"
+    "typescript": "tsc",
+    "tape": "set -e; for t in test/*.js; do node $t; done",
+    "test": "npm run typescript && npm run tape"
   },
   "author": "Andre Staltz <contact@staltz.com> (http://staltz.com)",
   "license": "MIT"
