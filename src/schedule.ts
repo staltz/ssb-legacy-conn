@@ -3,6 +3,7 @@ const ip = require('ip');
 const onWakeup = require('on-wakeup');
 const onNetwork = require('on-change-network');
 const hasNetwork = require('./has-network-debounced');
+import {Peer} from './types';
 
 function not(fn: Function) {
   return function(e: any) {
@@ -11,7 +12,6 @@ function not(fn: Function) {
 }
 
 function and(...args: Array<any>) {
-  // var args = [].slice.call(arguments);
   return function(value: any) {
     return args.every(function(fn: Function) {
       return fn.call(null, value);
@@ -25,59 +25,59 @@ function delay(failures: number, factor: number, max: number) {
   return Math.min(Math.pow(2, failures) * factor, max || Infinity);
 }
 
-function maxStateChange(M: number, e: any) {
-  return Math.max(M, e.stateChange || 0);
+function maxStateChange(M: number, peer: Peer) {
+  return Math.max(M, peer.stateChange || 0);
 }
 
-function peerNext(peer: any, opts: any) {
+function peerNext(peer: Peer, opts: any) {
   return (
-    (peer.stateChange | 0) + delay(peer.failure | 0, opts.factor, opts.max)
+    (peer.stateChange! | 0) + delay(peer.failure! | 0, opts.factor, opts.max)
   );
 }
 
 //detect if not connected to wifi or other network
 //(i.e. if there is only localhost)
 
-function isOffline(e: any) {
-  if (ip.isLoopback(e.host) || e.host == 'localhost') return false;
+function isOffline(p: Peer) {
+  if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
   return !hasNetwork();
 }
 
 var isOnline = not(isOffline);
 
-function isLocal(e: any) {
+function isLocal(p: Peer) {
   // don't rely on private ip address, because
   // cjdns creates fake private ip addresses.
   // ignore localhost addresses, because sometimes they get broadcast.
-  return !ip.isLoopback(e.host) && ip.isPrivate(e.host) && e.source === 'local';
+  return !ip.isLoopback(p.host) && ip.isPrivate(p.host) && p.source === 'local';
 }
 
-function isSeed(e: any) {
-  return e.source === 'seed';
+function isSeed(p: Peer) {
+  return p.source === 'seed';
 }
 
-function isFriend(e: any) {
-  return e.source === 'friends';
+function isFriend(p: Peer) {
+  return p.source === 'friends';
 }
 
-function isUnattempted(e: any) {
-  return !e.stateChange;
+function isUnattempted(p: Peer) {
+  return !p.stateChange;
 }
 
 //select peers which have never been successfully connected to yet,
 //but have been tried.
-function isInactive(e: any) {
-  return e.stateChange && (!e.duration || e.duration.mean == 0);
+function isInactive(p: Peer) {
+  return p.stateChange && (!p.duration || p.duration.mean == 0);
 }
 
-function isLongterm(e: any) {
-  return e.ping && e.ping.rtt && e.ping.rtt.mean > 0;
+function isLongterm(p: Peer) {
+  return p.ping && p.ping.rtt && p.ping.rtt.mean > 0;
 }
 
 //peers which we can connect to, but are not upgraded.
 //select peers which we can connect to, but are not upgraded to LT.
 //assume any peer is legacy, until we know otherwise...
-function isLegacy(peer: any) {
+function isLegacy(peer: Peer) {
   return (
     peer.duration &&
     (peer.duration && peer.duration.mean > 0) &&
@@ -85,20 +85,18 @@ function isLegacy(peer: any) {
   );
 }
 
-function isConnect(e: any) {
-  return 'connected' === e.state || 'connecting' === e.state;
+function isConnect(p: Peer) {
+  return 'connected' === p.state || 'connecting' === p.state;
 }
 
 //sort oldest to newest then take first n
-function earliest(peers: any, n: number) {
+function earliest(peers: Array<Peer>, n: number) {
   return peers
-    .sort(function(a: any, b: any) {
-      return a.stateChange - b.stateChange;
-    })
+    .sort((a, b) => a.stateChange! - b.stateChange!)
     .slice(0, Math.max(n, 0));
 }
 
-function select(peers: Array<any>, ts: number, filter: any, opts: any) {
+function select(peers: Array<Peer>, ts: number, filter: any, opts: any) {
   if (opts.disable) return [];
   //opts: { quota, groupMin, min, factor, max }
   var type = peers.filter(filter);
@@ -107,18 +105,13 @@ function select(peers: Array<any>, ts: number, filter: any, opts: any) {
   var min = unconnect.reduce(maxStateChange, 0) + opts.groupMin;
   if (ts < min) return [];
 
-  return earliest(
-    unconnect.filter(function(peer) {
-      return peerNext(peer, opts) < ts;
-    }),
-    count,
-  );
+  return earliest(unconnect.filter(peer => peerNext(peer, opts) < ts), count);
 }
 
 export = function Schedule(gossip: any, config: any, server: any) {
-  var min = 60e3,
-    hour = 60 * 60e3,
-    closed = false;
+  const min = 60e3;
+  const hour = 60 * 60e3;
+  let closed = false;
 
   //trigger hard reconnect after suspend or local network changes
   onWakeup(gossip.reconnect);
@@ -131,14 +124,14 @@ export = function Schedule(gossip: any, config: any, server: any) {
   }
 
   function connect(
-    peers: Array<any>,
+    peers: Array<Peer>,
     ts: number,
-    name: any,
+    name: string,
     filter: any,
     opts: any,
   ) {
     opts.group = name;
-    var connected = peers.filter(isConnect).filter(filter);
+    const connected = peers.filter(isConnect).filter(filter);
 
     //disconnect if over quota
     if (connected.length > opts.quota) {
@@ -150,8 +143,8 @@ export = function Schedule(gossip: any, config: any, server: any) {
     }
 
     //will return [] if the quota is full
-    var selected = select(peers, ts, and(filter, isOnline), opts);
-    selected.forEach(function(peer: any) {
+    const selected = select(peers, ts, and(filter, isOnline), opts);
+    selected.forEach(peer => {
       gossip.connect(peer, function() {});
     });
   }
@@ -176,13 +169,14 @@ export = function Schedule(gossip: any, config: any, server: any) {
       // don't attempt to connect while migration is running
       if (!server.ready() || isCurrentlyDownloading()) return;
 
-      var ts = Date.now();
-      var peers = gossip.peers();
+      const ts = Date.now();
+      const peers: Array<Peer> = gossip.peers();
 
-      var connected = peers.filter(and(isConnect, not(isLocal), not(isFriend)))
-        .length;
+      const connected = peers.filter(
+        and(isConnect, not(isLocal), not(isFriend)),
+      ).length;
 
-      var connectedFriends = peers.filter(and(isConnect, isFriend)).length;
+      const connectedFriends = peers.filter(and(isConnect, isFriend)).length;
 
       if (conf('friends', true))
         connect(
@@ -330,13 +324,13 @@ export = function Schedule(gossip: any, config: any, server: any) {
         );
       }
 
-      peers.filter(isConnect).forEach(function(e: any) {
-        var permanent = isLongterm(e) || isLocal(e);
+      peers.filter(isConnect).forEach(p => {
+        const permanent = isLongterm(p) || isLocal(p);
         if (
-          (!permanent || e.state === 'connecting') &&
-          e.stateChange + 10e3 < ts
+          (!permanent || p.state === 'connecting') &&
+          p.stateChange! + 10e3 < ts
         ) {
-          gossip.disconnect(e, function() {});
+          gossip.disconnect(p, () => {});
         }
       });
     }, 1000 * Math.random());
@@ -346,7 +340,7 @@ export = function Schedule(gossip: any, config: any, server: any) {
   pull(
     gossip.changes(),
     pull.drain(
-      function(ev: any) {
+      (ev: any) => {
         if (ev.type == 'disconnect') connections();
       },
       function() {

@@ -10,18 +10,20 @@ const path = require('path');
 const deepEqual = require('deep-equal');
 import Schedule = require('./schedule');
 import Init = require('./init');
+import {Callback, Peer} from './types';
 
 function isFunction(f: any): f is Function {
   return 'function' === typeof f;
 }
 
-function stringify(peer: any): string {
+function stringify(peer: Peer | string): string {
   //#region MODIFIED
+  if (typeof peer === 'string') return peer;
   return [peer.source, peer.host, peer.port, peer.key].join(':');
   //#endregion
 }
 
-function isObject(o: any): boolean {
+function isPeerObject(o: any): o is Peer {
   return o && 'object' == typeof o;
 }
 
@@ -34,9 +36,9 @@ function isString(s: any): s is string {
   return 'string' == typeof s;
 }
 
-function coearseAddress(address: any): string {
-  if (isObject(address)) {
-    if (ref.isAddress(address.address)) return address.address;
+function toAddressString(address: Peer | string): string {
+  if (isPeerObject(address)) {
+    if (ref.isAddress(address.address)) return address.address!;
     //#region MODIFIED
     if (address.source === 'dht') {
       return (
@@ -51,7 +53,7 @@ function coearseAddress(address: any): string {
       );
     }
     //#endregion
-    var protocol = 'net';
+    let protocol = 'net';
     if (address.host && address.host.endsWith('.onion')) protocol = 'onion';
     return (
       [protocol, address.host, address.port].join(':') +
@@ -89,13 +91,12 @@ function isDhtAddress(addr: any) {
 }
 
 function isBluetoothAddress(addr: any) {
-  var isBtAddress = typeof addr === 'string' && addr.substr(0, 3) === 'bt:';
-  return isBtAddress;
+  return typeof addr === 'string' && addr.substr(0, 3) === 'bt:';
 }
 
-function parseDhtAddress(addr: any) {
-  var [transport /*, transform */] = addr.split('~');
-  var [dhtTag, seed, remoteId] = transport.split(':');
+function parseDhtAddress(addr: string): Peer {
+  const [transport /*, transform */] = addr.split('~');
+  const [dhtTag, seed, remoteId] = transport.split(':');
   if (dhtTag !== 'dht') throw new Error('Invalid DHT address ' + addr);
   return {
     host: seed + ':' + remoteId,
@@ -105,11 +106,11 @@ function parseDhtAddress(addr: any) {
   };
 }
 
-function parseBluetoothAddress(addr: any) {
-  var [transport, transform] = addr.split('~');
+function parseBluetoothAddress(addr: string): Peer {
+  const [transport, transform] = addr.split('~');
 
-  var [btTag, addrWithoutColons] = transport.split(':');
-  var [shsTag, remoteId] = transform.split(':');
+  const [btTag, addrWithoutColons] = transport.split(':');
+  const [shsTag, remoteId] = transform.split(':');
   if (btTag !== 'bt') throw new Error('Invalid BT address ' + addr);
   if (shsTag !== 'shs') throw new Error('Invalid BT (SHS) address ' + addr);
 
@@ -135,26 +136,23 @@ module.exports = {
     anonymous: {allow: ['ping']},
   },
   init: function(server: any, config: any) {
-    var notify = Notify();
-    var closeScheduler: any;
+    const notify = Notify();
+    let closeScheduler: any;
 
-    var gossipJsonPath = path.join(config.path, 'gossip.json');
-    var stateFile = AtomicFile(gossipJsonPath);
+    const stateFile = AtomicFile(path.join(config.path, 'gossip.json'));
 
-    var status: any = {};
+    const status: Record<string, Peer> = {};
 
     //Known Peers
-    var peers: Array<any> = [];
+    const peers: Array<Peer> = [];
 
-    function getPeer(id: string) {
-      return peers.find(function(e) {
-        return e && e.key === id;
-      });
+    function getPeer(id: string): Peer | undefined {
+      return peers.find(e => e && e.key === id);
     }
 
-    function simplify(peer: any) {
+    function simplify(peer: Peer) {
       return {
-        address: peer.address || coearseAddress(peer),
+        address: peer.address || toAddressString(peer),
         source: peer.source,
         state: peer.state,
         stateChange: peer.stateChange,
@@ -169,32 +167,32 @@ module.exports = {
     }
 
     server.status.hook(function(fn: Function) {
-      var _status = fn();
+      const _status = fn();
       _status.gossip = status;
-      peers.forEach(function(peer) {
-        if (peer.stateChange + 3e3 > Date.now() || peer.state === 'connected')
-          status[peer.key] = simplify(peer);
+      peers.forEach(peer => {
+        if (peer.stateChange! + 3e3 > Date.now() || peer.state === 'connected')
+          status[peer.key!] = simplify(peer);
       });
       return _status;
     });
 
     server.close.hook(function(this: any, fn: Function, args: Array<any>) {
       closeScheduler();
-      for (var id in server.peers)
-        server.peers[id].forEach(function(peer: any) {
+      for (let id in server.peers)
+        server.peers[id].forEach((peer: any) => {
           peer.close(true);
         });
       return fn.apply(this, args);
     });
 
-    var timer_ping = 5 * 6e4;
+    const timer_ping = 5 * 6e4;
 
-    function setConfig(name: any, value: any) {
+    function setConfig(name: string, value: any) {
       config.gossip = config.gossip || {};
       config.gossip[name] = value;
 
-      var cfgPath = path.join(config.path, 'config');
-      var existingConfig: any = {};
+      const cfgPath = path.join(config.path, 'config');
+      let existingConfig: any = {};
 
       // load ~/.ssb/config
       try {
@@ -218,20 +216,24 @@ module.exports = {
       peers: function() {
         return peers;
       },
-      get: function(addr: any) {
+      get: function(addr: Peer | string) {
         //addr = ref.parseAddress(addr)
-        if (ref.isFeed(addr)) return getPeer(addr);
-        else if (ref.isFeed(addr.key)) return getPeer(addr.key);
-        else throw new Error('must provide id:' + JSON.stringify(addr));
+        if (ref.isFeed(addr)) {
+          return getPeer(addr as string);
+        } else if (ref.isFeed((addr as Peer).key!)) {
+          return getPeer((addr as Peer).key!);
+        } else {
+          throw new Error('must provide id:' + JSON.stringify(addr));
+        }
       },
-      connect: function(addr: any, cb: (err?: any, res?: any) => void) {
-        if (ref.isFeed(addr)) addr = gossip.get(addr);
+      connect: function(addr: Peer | string, cb: Callback<any>) {
         server.emit('log:info', ['ssb-server', stringify(addr), 'CONNECTING']);
+        if (ref.isFeed(addr)) addr = gossip.get(addr)!;
         //#region MODIFIED
         if (isDhtAddress(addr)) {
-          addr = parseDhtAddress(addr);
+          addr = parseDhtAddress(addr as string);
         } else if (isBluetoothAddress(addr)) {
-          addr = parseBluetoothAddress(addr);
+          addr = parseBluetoothAddress(addr as string);
         } else if (typeof addr === 'string') {
           addr = ref.parseAddress(addr);
         }
@@ -242,12 +244,13 @@ module.exports = {
         if (!addr.key) return cb(new Error('address must have ed25519 key'));
         // add peer to the table, incase it isn't already.
         gossip.add(addr, addr.source || 'manual');
-        var p = gossip.get(addr);
-        if (!p) return cb();
+        const maybePeer = gossip.get(addr);
+        if (!maybePeer) return cb();
+        const p = maybePeer!;
 
         p.stateChange = Date.now();
         p.state = 'connecting';
-        server.connect(coearseAddress(p), function(err: any, rpc: any) {
+        server.connect(toAddressString(p), (err: any, rpc: any) => {
           //#region MODIFIED
           if (err && err.message && /Already connected/.test(err.message)) {
             delete p.error;
@@ -281,17 +284,20 @@ module.exports = {
         });
       },
 
-      disconnect: valid.async(function(addr: any, cb: any) {
-        var peer = gossip.get(addr);
+      disconnect: valid.async(function(addr: Peer | string, cb: any) {
+        const peer = gossip.get(addr);
+        if (!peer) return;
 
         peer.state = 'disconnecting';
         peer.stateChange = Date.now();
-        if (!peer || !peer.disconnect) cb && cb();
-        else
-          peer.disconnect(true, function(_err: any) {
+        if (!peer || !peer.disconnect) {
+          cb && cb();
+        } else {
+          peer.disconnect(true, (_err: any) => {
             peer.stateChange = Date.now();
             cb && cb();
           });
+        }
       }, 'string|object'),
 
       changes: function() {
@@ -299,57 +305,66 @@ module.exports = {
       },
       //add an address to the peer table.
       add: valid.sync(
-        function(addr: any, source: any) {
+        function(addr: Peer | string, source: Peer['source']) {
           //#region MODIFIED
-          const stringAddress = coearseAddress(addr);
+          const addressString = toAddressString(addr);
           if (isDhtAddress(addr)) {
-            addr = parseDhtAddress(addr);
+            addr = parseDhtAddress(addr as string);
           } else if (isBluetoothAddress(addr)) {
-            addr = parseBluetoothAddress(addr);
+            addr = parseBluetoothAddress(addr as string);
           } else if (typeof addr === 'string') {
             addr = ref.parseAddress(addr);
           } else if (!addr || (addr.source !== 'dht' && addr.source !== 'bt')) {
             if (!ref.isAddress(addr))
               throw new Error('not a valid address:' + JSON.stringify(addr));
           }
-          addr.address = stringAddress;
           //#endregion
+          const peerToAdd = addr as Peer;
+          peerToAdd.address = addressString;
           // check that this is a valid address, and not pointing at self.
 
-          if (addr.key === server.id) return;
+          if (peerToAdd.key === server.id) return;
 
-          var f = gossip.get(addr);
+          const existingPeer = gossip.get(addr);
 
-          if (!f) {
+          if (!existingPeer) {
             // new peer
-            addr.source = source;
-            addr.announcers = 1;
-            addr.duration = addr.duration || null;
-            peers.push(addr);
-            notify({type: 'discover', peer: addr, source: source || 'manual'});
-            return addr;
-          } else if (source === 'friends' || source === 'local') {
-            // this peer is a friend or local, override old source to prioritize gossip
-            f.source = source;
-          }
-          //don't count local over and over
-          else if (f.source != 'local') f.announcers++;
+            peerToAdd.source = source;
+            peerToAdd.announcers = 1;
+            peerToAdd.duration = peerToAdd.duration || (0 as any);
+            peers.push(peerToAdd);
+            notify({
+              type: 'discover',
+              peer: peerToAdd,
+              source: source || 'manual',
+            });
+            return peerToAdd;
+          } else {
+            if (source === 'friends' || source === 'local') {
+              // this peer is a friend or local,
+              // override old source to prioritize gossip
+              existingPeer.source = source;
+            } else if (existingPeer.source !== 'local') {
+              //don't count local over and over
+              existingPeer.announcers!++;
+            }
 
-          return f;
+            return existingPeer;
+          }
         },
         'string|object',
         'string?',
       ),
-      remove: function(addr: any) {
-        var peer = gossip.get(addr);
-        var index = peers.indexOf(peer);
+      remove: function(addr: Peer | string) {
+        const peer = gossip.get(addr);
+        const index = peers.indexOf(peer!);
         if (~index) {
           peers.splice(index, 1);
           notify({type: 'remove', peer: peer});
         }
       },
-      ping: function(_opts: any) {
-        var timeout = (config.timers && config.timers.ping) || 5 * 60e3;
+      ping: function() {
+        let timeout = (config.timers && config.timers.ping) || 5 * 60e3;
         //between 10 seconds and 30 minutes, default 5 min
         timeout = Math.max(10e3, Math.min(timeout, 30 * 60e3));
         return ping({timeout: timeout});
@@ -358,19 +373,20 @@ module.exports = {
         for (var id in server.peers)
           if (id !== server.id)
             //don't disconnect local client
-            server.peers[id].forEach(function(peer: any) {
+            server.peers[id].forEach((peer: any) => {
               peer.close(true);
             });
         return (gossip.wakeup = Date.now());
       },
-      enable: valid.sync(function(type: any) {
+      enable: valid.sync(function(type: string) {
         type = type || 'global';
         setConfig(type, true);
-        if (type === 'local' && server.local && server.local.init)
+        if (type === 'local' && server.local && server.local.init) {
           server.local.init();
+        }
         return 'enabled gossip type ' + type;
       }, 'string?'),
-      disable: valid.sync(function(type: any) {
+      disable: valid.sync(function(type: string) {
         type = type || 'global';
         setConfig(type, false);
         return 'disabled gossip type ' + type;
@@ -381,11 +397,14 @@ module.exports = {
     Init(gossip, config, server);
     //get current state
 
-    server.on('rpc:connect', function onRpcConnect(rpc: any, isClient: any) {
+    server.on('rpc:connect', function onRpcConnect(
+      rpc: any,
+      isClient: boolean,
+    ) {
       // if we're not ready, close this connection immediately
       if (!server.ready() && rpc.id !== server.id) return rpc.close();
 
-      var peer = getPeer(rpc.id);
+      const peer = getPeer(rpc.id);
       //#region MODIFIED
       rpc._connectRetries = rpc._connectRetries || 0;
       if (!peer && isClient && rpc._connectRetries < 4) {
@@ -401,7 +420,7 @@ module.exports = {
       else if (!peer) {
         if (rpc.id !== server.id) {
           server.emit('log:info', ['ssb-server', rpc.id, 'Connected']);
-          rpc.on('closed', function() {
+          rpc.on('closed', () => {
             server.emit('log:info', ['ssb-server', rpc.id, 'Disconnected']);
           });
         }
@@ -415,25 +434,25 @@ module.exports = {
       peer.client = !!isClient;
       peer.state = 'connected';
       peer.stateChange = Date.now();
-      peer.disconnect = function(err: any, cb: any) {
+      peer.disconnect = (err: any, cb: Callback<any>) => {
         if (isFunction(err)) (cb = err), (err = null);
         rpc.close(err, cb);
       };
 
       if (isClient) {
         //default ping is 5 minutes...
-        var pp = ping({serve: true, timeout: timer_ping}, function(_: any) {});
+        const pp = ping({serve: true, timeout: timer_ping}, () => {});
         peer.ping = {rtt: pp.rtt, skew: pp.skew};
         pull(
           pp,
-          rpc.gossip.ping({timeout: timer_ping}, function(err: any) {
-            if (err.name === 'TypeError') peer.ping.fail = true;
+          rpc.gossip.ping({timeout: timer_ping}, (err: any) => {
+            if (err.name === 'TypeError') peer.ping!.fail = true;
           }),
           pp,
         );
       }
 
-      rpc.on('closed', function() {
+      rpc.on('closed', () => {
         delete status[rpc.id];
         server.emit('log:info', [
           'ssb-server',
@@ -442,13 +461,13 @@ module.exports = {
             'DISCONNECTED. state was',
             peer.state,
             'for',
-            (Date.now() - peer.stateChange) / 1000,
+            (Date.now() - peer.stateChange!) / 1000,
             'seconds',
           ].join(' '),
         ]);
         //track whether we have successfully connected.
         //or how many failures there have been.
-        var since = peer.stateChange;
+        const since = peer.stateChange!;
         peer.stateChange = Date.now();
         //      if(peer.state === 'connected') //may be "disconnecting"
         peer.duration = stats(peer.duration, peer.stateChange - since);
@@ -459,11 +478,11 @@ module.exports = {
       notify({type: 'connect', peer: peer});
     });
 
-    var last: any;
-    stateFile.get(function(_err: any, ary: any) {
+    let last: any;
+    stateFile.get((_err: any, ary: any) => {
       last = ary || [];
       if (Array.isArray(ary))
-        ary.forEach(function(v) {
+        ary.forEach(v => {
           delete v.state;
           // don't add local peers (wait to rediscover)
           // adding peers back this way means old format gossip.json
@@ -480,18 +499,16 @@ module.exports = {
         });
     });
 
-    var int = setInterval(function() {
-      var copy = JSON.parse(JSON.stringify(peers));
+    const int = setInterval(() => {
+      const copy: Array<Peer> = JSON.parse(JSON.stringify(peers));
       copy
-        .filter(function(e: any) {
-          return e.source !== 'local';
-        })
-        .forEach(function(e: any) {
+        .filter(e => e.source !== 'local')
+        .forEach(e => {
           delete e.state;
         });
       if (deepEqual(copy, last)) return;
       last = copy;
-      stateFile.set(copy, function(err: any) {
+      stateFile.set(copy, (err: any) => {
         if (err) console.log(err);
       });
     }, 10 * 1000);
