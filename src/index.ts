@@ -515,14 +515,6 @@ module.exports = {
 
     if (int.unref) int.unref();
 
-    if (server.conn) {
-      throw new Error(
-        'Cannot register ssb-legacy-conn because ' +
-          'an existing conn plugin is already registered.',
-      );
-    } else {
-      server.conn = gossip;
-    }
     return gossip;
   },
 };

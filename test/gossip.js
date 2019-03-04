@@ -45,7 +45,7 @@ tape('gossip: add and get peers', function(t) {
 
   //clone input, because gossip mutates it.
   ssbServer.gossip.add(localhost);
-  ssbServer.conn.add(ip);
+  ssbServer.gossip.add(ip);
   ssbServer.gossip.add(example);
 
   t.deepEqual(
