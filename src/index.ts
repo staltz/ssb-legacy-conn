@@ -434,10 +434,6 @@ module.exports = {
       }, 'string?'),
     };
 
-    closeScheduler = Schedule(gossip, config, server);
-    Init(gossip, config, server);
-    //get current state
-
     server.on('rpc:connect', function onRpcConnect(
       rpc: any,
       isClient: boolean,
@@ -535,11 +531,15 @@ module.exports = {
       notify({type: 'connect', peer: peer});
     });
 
-    for (let [address, data] of connDB.entries()) {
-      if (data.source !== 'local') {
-        gossip.add(address, 'stored');
+    connDB.loaded().then(() => {
+      closeScheduler = Schedule(gossip, config, server);
+      Init(gossip, config, server);
+      for (let [address, data] of connDB.entries()) {
+        if (data.source !== 'local') {
+          gossip.add(address, 'stored');
+        }
       }
-    }
+    });
 
     return gossip;
   },
