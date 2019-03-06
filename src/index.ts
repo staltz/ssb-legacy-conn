@@ -355,6 +355,7 @@ module.exports = {
             peerToAdd.source = source;
             peerToAdd.announcers = 1;
             peerToAdd.duration = peerToAdd.duration || (0 as any);
+            Object.assign(peerToAdd, connDB.get(addressString));
             if (source !== 'local') {
               connDB.set(addressString, {
                 host: peerToAdd.host,
