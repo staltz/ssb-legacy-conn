@@ -5,7 +5,7 @@ export type Peer = {
   port?: number;
   source: 'seed' | 'pub' | 'manual' | 'friends' | 'local' | 'dht' | 'bt';
   error?: string;
-  state?: string;
+  state?: undefined | 'connecting' | 'connected' | 'disconnecting';
   stateChange?: number;
   failure?: number;
   client?: boolean;

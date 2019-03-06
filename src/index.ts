@@ -1,16 +1,15 @@
+import ConnDB = require('ssb-conn-db');
+import Schedule = require('./schedule');
+import Init = require('./init');
+import {Callback, Peer} from './types';
 const pull = require('pull-stream');
 const Notify = require('pull-notify');
 const valid = require('muxrpc-validation')({});
 const ref = require('ssb-ref');
 const ping = require('pull-ping');
 const stats = require('statistics');
-const AtomicFile = require('atomic-file');
 const fs = require('fs');
 const path = require('path');
-const deepEqual = require('deep-equal');
-import Schedule = require('./schedule');
-import Init = require('./init');
-import {Callback, Peer} from './types';
 
 function isFunction(f: any): f is Function {
   return 'function' === typeof f;
@@ -139,11 +138,11 @@ module.exports = {
     const notify = Notify();
     let closeScheduler: any;
 
-    const stateFile = AtomicFile(path.join(config.path, 'gossip.json'));
+    const connDB = new ConnDB({path: config.path, writeTimeout: 10e3});
 
     const status: Record<string, Peer> = {};
 
-    //Known Peers
+    // In-memory mirror of conn-db and (yet to be built) in-memory conn-hub db:
     const peers: Array<Peer> = [];
 
     function getPeer(id: string): Peer | undefined {
@@ -250,12 +249,19 @@ module.exports = {
 
         p.stateChange = Date.now();
         p.state = 'connecting';
-        server.connect(toAddressString(p), (err: any, rpc: any) => {
+        const addressString = toAddressString(p);
+        connDB.update(addressString, {
+          stateChange: p.stateChange,
+        });
+        server.connect(addressString, (err: any, rpc: any) => {
           //#region MODIFIED
           if (err && err.message && /Already connected/.test(err.message)) {
             delete p.error;
             p.state = 'connected';
             p.failure = 0;
+            connDB.update(addressString, {
+              failure: p.failure,
+            });
             notify({type: 'connect', peer: p});
           } else if (err) {
             //#endregion
@@ -263,6 +269,13 @@ module.exports = {
             p.state = undefined;
             p.failure = (p.failure || 0) + 1;
             p.stateChange = Date.now();
+            p.duration = stats(p.duration, 0);
+            connDB.update(addressString, {
+              error: p.error,
+              failure: p.failure,
+              stateChange: p.stateChange,
+              duration: p.duration,
+            });
             notify({type: 'connect-failure', peer: p});
             server.emit('log:info', [
               'ssb-server',
@@ -270,12 +283,15 @@ module.exports = {
               'ERR',
               err.message || err,
             ]);
-            p.duration = stats(p.duration, 0);
             return cb && cb(err);
           } else {
             delete p.error;
             p.state = 'connected';
             p.failure = 0;
+            connDB.update(addressString, {
+              error: p.error,
+              failure: p.failure,
+            });
             //#region MODIFIED
             notify({type: 'connect', peer: p});
             //#endregion
@@ -288,13 +304,20 @@ module.exports = {
         const peer = gossip.get(addr);
         if (!peer) return;
 
+        const addressString = toAddressString(peer);
         peer.state = 'disconnecting';
         peer.stateChange = Date.now();
+        connDB.update(addressString, {
+          stateChange: peer.stateChange,
+        });
         if (!peer || !peer.disconnect) {
           cb && cb();
         } else {
           peer.disconnect(true, (_err: any) => {
             peer.stateChange = Date.now();
+            connDB.update(addressString, {
+              stateChange: peer.stateChange,
+            });
             cb && cb();
           });
         }
@@ -332,6 +355,16 @@ module.exports = {
             peerToAdd.source = source;
             peerToAdd.announcers = 1;
             peerToAdd.duration = peerToAdd.duration || (0 as any);
+            if (source !== 'local') {
+              connDB.set(addressString, {
+                host: peerToAdd.host,
+                port: peerToAdd.port,
+                key: peerToAdd.key,
+                source: peerToAdd.source,
+                announcers: peerToAdd.announcers,
+                duration: peerToAdd.duration,
+              });
+            }
             peers.push(peerToAdd);
             notify({
               type: 'discover',
@@ -344,9 +377,15 @@ module.exports = {
               // this peer is a friend or local,
               // override old source to prioritize gossip
               existingPeer.source = source;
+              connDB.update(addressString, {
+                source: existingPeer.source,
+              });
             } else if (existingPeer.source !== 'local') {
               //don't count local over and over
               existingPeer.announcers!++;
+              connDB.update(addressString, {
+                announcers: existingPeer.announcers,
+              });
             }
 
             return existingPeer;
@@ -357,9 +396,11 @@ module.exports = {
       ),
       remove: function(addr: Peer | string) {
         const peer = gossip.get(addr);
+        if (!peer) return;
         const index = peers.indexOf(peer!);
         if (~index) {
           peers.splice(index, 1);
+          connDB.delete(toAddressString(peer));
           notify({type: 'remove', peer: peer});
         }
       },
@@ -438,15 +479,27 @@ module.exports = {
         if (isFunction(err)) (cb = err), (err = null);
         rpc.close(err, cb);
       };
+      connDB.update(toAddressString(peer), {
+        client: peer.client,
+        stateChange: peer.stateChange,
+      });
 
       if (isClient) {
         //default ping is 5 minutes...
         const pp = ping({serve: true, timeout: timer_ping}, () => {});
         peer.ping = {rtt: pp.rtt, skew: pp.skew};
+        connDB.update(toAddressString(peer), {
+          ping: peer.ping,
+        });
         pull(
           pp,
           rpc.gossip.ping({timeout: timer_ping}, (err: any) => {
-            if (err.name === 'TypeError') peer.ping!.fail = true;
+            if (err.name === 'TypeError') {
+              peer.ping!.fail = true;
+              connDB.update(toAddressString(peer), {
+                ping: peer.ping,
+              });
+            }
           }),
           pp,
         );
@@ -472,48 +525,21 @@ module.exports = {
         //      if(peer.state === 'connected') //may be "disconnecting"
         peer.duration = stats(peer.duration, peer.stateChange - since);
         peer.state = undefined;
+        connDB.update(toAddressString(peer), {
+          stateChange: peer.stateChange,
+          duration: peer.duration,
+        });
         notify({type: 'disconnect', peer: peer});
       });
 
       notify({type: 'connect', peer: peer});
     });
 
-    let last: any;
-    stateFile.get((_err: any, ary: any) => {
-      last = ary || [];
-      if (Array.isArray(ary))
-        ary.forEach(v => {
-          delete v.state;
-          // don't add local peers (wait to rediscover)
-          // adding peers back this way means old format gossip.json
-          // will be updated to having proper address values.
-          //#region MODIFIED
-          if (v.source === 'dht') {
-            gossip.add(v, 'dht');
-          } else if (v.source === 'bt') {
-            gossip.add(v, 'bt');
-          } else if (v.source !== 'local') {
-            gossip.add(v, 'stored');
-          }
-          //#region MODIFIED
-        });
-    });
-
-    const int = setInterval(() => {
-      const copy: Array<Peer> = JSON.parse(JSON.stringify(peers));
-      copy
-        .filter(e => e.source !== 'local')
-        .forEach(e => {
-          delete e.state;
-        });
-      if (deepEqual(copy, last)) return;
-      last = copy;
-      stateFile.set(copy, (err: any) => {
-        if (err) console.log(err);
-      });
-    }, 10 * 1000);
-
-    if (int.unref) int.unref();
+    for (let [address, data] of connDB.entries()) {
+      if (data.source !== 'local') {
+        gossip.add(address, 'stored');
+      }
+    }
 
     return gossip;
   },
