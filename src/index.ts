@@ -101,7 +101,7 @@ function parseDhtAddress(addr: string): Peer {
   return {
     host: seed + ':' + remoteId,
     port: 0,
-    key: '@' + remoteId,
+    key: remoteId[0] === '@' ? remoteId : '@' + remoteId,
     source: 'dht',
   };
 }
@@ -114,7 +114,12 @@ function parseBluetoothAddress(addr: string): Peer {
   if (btTag !== 'bt') throw new Error('Invalid BT address ' + addr);
   if (shsTag !== 'shs') throw new Error('Invalid BT (SHS) address ' + addr);
 
-  return {host: addrWithoutColons, port: 0, key: '@' + remoteId, source: 'bt'};
+  return {
+    host: addrWithoutColons,
+    port: 0,
+    key: remoteId[0] === '@' ? remoteId : '@' + remoteId,
+    source: 'bt',
+  };
 }
 //#endregion
 
@@ -537,7 +542,9 @@ module.exports = {
       closeScheduler = Schedule(gossip, config, server);
       Init(gossip, config, server);
       for (let [address, data] of connDB.entries()) {
-        if (data.source !== 'local') {
+        if (data.source === 'dht') {
+          gossip.add(address, 'dht');
+        } else if (data.source !== 'local' && data.source !== 'bt') {
           gossip.add(address, 'stored');
         }
         await sleep(32);
