@@ -11,6 +11,7 @@
   "dependencies": {
     "has-network": "0.0.1",
     "ip": "^1.1.5",
+    "delay": "^3.1.0",
     "muxrpc-validation": "^3.0.0",
     "on-change-network": "0.0.2",
     "on-wakeup": "^1.0.1",
