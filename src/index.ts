@@ -8,7 +8,6 @@ const valid = require('muxrpc-validation')({});
 const ref = require('ssb-ref');
 const ping = require('pull-ping');
 const stats = require('statistics');
-const sleep = require('delay');
 const fs = require('fs');
 const path = require('path');
 
@@ -538,7 +537,7 @@ module.exports = {
       notify({type: 'connect', peer: peer});
     });
 
-    connDB.loaded().then(async () => {
+    connDB.loaded().then(() => {
       closeScheduler = Schedule(gossip, config, server);
       Init(gossip, config, server);
       for (let [address, data] of connDB.entries()) {
@@ -547,7 +546,6 @@ module.exports = {
         } else if (data.source !== 'local' && data.source !== 'bt') {
           gossip.add(address, 'stored');
         }
-        await sleep(32);
       }
     });
 
