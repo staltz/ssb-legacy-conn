@@ -40,7 +40,8 @@ function peerNext(peer: Peer, opts: any) {
 
 function isOffline(p: Peer) {
   if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
-  return !hasNetwork();
+  else if (p.source === "bt") return false;
+  else return !hasNetwork();
 }
 
 var isOnline = not(isOffline);
