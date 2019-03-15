@@ -306,6 +306,23 @@ module.exports = {
       },
     };
 
+    function setupPing(address: string, rpc: any) {
+      const PING_TIMEOUT = 5 * 6e4; // 5 minutes
+      const pp = ping({serve: true, timeout: PING_TIMEOUT}, () => {});
+      connDB.update(address, {ping: {rtt: pp.rtt, skew: pp.skew}});
+      pull(
+        pp,
+        rpc.gossip.ping({timeout: PING_TIMEOUT}, (err: any) => {
+          if (err.name === 'TypeError') {
+            connDB.update(address, (prev: any) => ({
+              ping: {...(prev.ping || {}), fail: true},
+            }));
+          }
+        }),
+        pp,
+      );
+    }
+
     function onConnecting(ev: HubEvent) {
       connDB.update(ev.address, {
         stateChange: Date.now(),
@@ -346,6 +363,8 @@ module.exports = {
       }
       server.emit('log:info', ['ssb-server', ev.address, 'PEER JOINED']);
       notify({type: 'connect', peer});
+
+      if (ev.details.isClient) setupPing(ev.address, ev.details.rpc);
     }
 
     function onDisconnecting(ev: HubEvent) {
@@ -386,19 +405,6 @@ module.exports = {
       notify({type: 'disconnect', peer});
     }
 
-    function onPing(ev: HubEvent) {
-      const pp = ev.details;
-      connDB.update(ev.address, {ping: {rtt: pp.rtt, skew: pp.skew}});
-    }
-
-    function onPingFailed(ev: HubEvent) {
-      if (ev.details.name === 'TypeError') {
-        connDB.update(ev.address, (prev: any) => ({
-          ping: {...(prev.ping || {}), fail: true},
-        }));
-      }
-    }
-
     pull(
       connHub.listen(),
       pull.drain((ev: HubEvent) => {
@@ -408,8 +414,6 @@ module.exports = {
         if (ev.type === 'disconnecting') onDisconnecting(ev);
         if (ev.type === 'disconnecting-failed') onDisconnectingFailed(ev);
         if (ev.type === 'disconnected') onDisconnected(ev);
-        if (ev.type === 'ping') onPing(ev);
-        if (ev.type === 'ping-failed') onPingFailed(ev);
       }),
     );
 
