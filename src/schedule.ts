@@ -1,9 +1,12 @@
+import ConnDB = require('ssb-conn-db');
+import ConnHub = require('ssb-conn-hub');
+import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
+import {Peer} from './types';
 const pull = require('pull-stream');
 const ip = require('ip');
 const onWakeup = require('on-wakeup');
 const onNetwork = require('on-change-network');
 const hasNetwork = require('./has-network-debounced');
-import {Peer} from './types';
 
 function not(fn: Function) {
   return function(e: any) {
@@ -86,8 +89,11 @@ function isLegacy(peer: Peer) {
   );
 }
 
-function isConnect(p: Peer) {
-  return 'connected' === p.state || 'connecting' === p.state;
+function makeIsConnect(connHub: ConnHub) {
+  return function isConnect(p: Peer) {
+    const state = connHub.getState(p.address!);
+    return state === 'connected' || state === 'connecting';
+  };
 }
 
 //sort oldest to newest then take first n
@@ -97,32 +103,48 @@ function earliest(peers: Array<Peer>, n: number) {
     .slice(0, Math.max(n, 0));
 }
 
-function select(peers: Array<Peer>, ts: number, filter: any, opts: any) {
-  if (opts.disable) return [];
-  //opts: { quota, groupMin, min, factor, max }
-  var type = peers.filter(filter);
-  var unconnect = type.filter(not(isConnect));
-  var count = Math.max(opts.quota - type.filter(isConnect).length, 0);
-  var min = unconnect.reduce(maxStateChange, 0) + opts.groupMin;
-  if (ts < min) return [];
+function makeSelect(connHub: ConnHub) {
+  const isConnect = makeIsConnect(connHub);
+  return function select(
+    peers: Array<Peer>,
+    ts: number,
+    filter: any,
+    opts: any,
+  ) {
+    if (opts.disable) return [];
+    //opts: { quota, groupMin, min, factor, max }
+    var type = peers.filter(filter);
+    var unconnect = type.filter(not(isConnect));
+    var count = Math.max(opts.quota - type.filter(isConnect).length, 0);
+    var min = unconnect.reduce(maxStateChange, 0) + opts.groupMin;
+    if (ts < min) return [];
 
-  return earliest(unconnect.filter(peer => peerNext(peer, opts) < ts), count);
+    return earliest(unconnect.filter(peer => peerNext(peer, opts) < ts), count);
+  };
 }
 
-export = function Schedule(gossip: any, config: any, server: any) {
+export = function Schedule(
+  config: any,
+  server: any,
+  connDB: ConnDB,
+  connHub: ConnHub,
+) {
   const min = 60e3;
   const hour = 60 * 60e3;
   let closed = false;
 
   //trigger hard reconnect after suspend or local network changes
-  onWakeup(gossip.reconnect);
-  onNetwork(gossip.reconnect);
+  onWakeup(() => connHub.reset());
+  onNetwork(() => connHub.reset());
 
   function conf(name: any, def: any) {
     if (config.gossip == null) return def;
     var value = config.gossip[name];
     return value == null || value === '' ? def : value;
   }
+
+  const select = makeSelect(connHub);
+  const isConnect = makeIsConnect(connHub);
 
   function connect(
     peers: Array<Peer>,
@@ -137,8 +159,8 @@ export = function Schedule(gossip: any, config: any, server: any) {
     //disconnect if over quota
     if (connected.length > opts.quota * 2) {
       return earliest(connected, connected.length - opts.quota).forEach(
-        function(peer: any) {
-          gossip.disconnect(peer, function() {});
+        peer => {
+          connHub.disconnect(peer.address!).then(() => {}, _err => {});
         },
       );
     }
@@ -146,7 +168,7 @@ export = function Schedule(gossip: any, config: any, server: any) {
     //will return [] if the quota is full
     const selected = select(peers, ts, and(filter, isOnline), opts);
     selected.forEach(peer => {
-      gossip.connect(peer, function() {});
+      connHub.connect(peer.address!).then(() => {}, _err => {});
     });
   }
 
@@ -171,7 +193,9 @@ export = function Schedule(gossip: any, config: any, server: any) {
       if (!server.ready() || isCurrentlyDownloading()) return;
 
       const ts = Date.now();
-      const peers: Array<Peer> = gossip.peers();
+      const peers: Array<Peer> = Array.from(connDB.entries()).map(
+        ([address, data]) => ({...data, address}),
+      );
 
       const connected = peers.filter(
         and(isConnect, not(isLocal), not(isFriend)),
@@ -328,10 +352,10 @@ export = function Schedule(gossip: any, config: any, server: any) {
       peers.filter(isConnect).forEach(p => {
         const permanent = isLongterm(p) || isLocal(p);
         if (
-          (!permanent || p.state === 'connecting') &&
+          (!permanent || connHub.getState(p.address!) === 'connecting') &&
           p.stateChange! + 10e3 < ts
         ) {
-          gossip.disconnect(p, () => {});
+          connHub.disconnect(p.address!);
         }
       });
     }, 1000 * Math.random());
@@ -339,10 +363,10 @@ export = function Schedule(gossip: any, config: any, server: any) {
   }
 
   pull(
-    gossip.changes(),
+    connHub.listen(),
     pull.drain(
-      (ev: any) => {
-        if (ev.type == 'disconnect') connections();
+      (ev: HubEvent) => {
+        if (ev.type == 'disconnected') connections();
       },
       function() {
         console.warn(

@@ -3,7 +3,15 @@ export type Peer = {
   key?: string;
   host?: string;
   port?: number;
-  source: 'seed' | 'pub' | 'manual' | 'friends' | 'local' | 'dht' | 'bt';
+  source:
+    | 'seed'
+    | 'pub'
+    | 'manual'
+    | 'friends'
+    | 'local'
+    | 'dht'
+    | 'bt'
+    | 'stored';
   error?: string;
   state?: undefined | 'connecting' | 'connected' | 'disconnecting';
   stateChange?: number;

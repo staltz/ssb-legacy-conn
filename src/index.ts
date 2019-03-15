@@ -1,44 +1,29 @@
 import ConnDB = require('ssb-conn-db');
+import ConnHub = require('ssb-conn-hub');
+import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import Schedule = require('./schedule');
 import Init = require('./init');
 import {Callback, Peer} from './types';
 const pull = require('pull-stream');
 const Notify = require('pull-notify');
-const valid = require('muxrpc-validation')({});
 const ref = require('ssb-ref');
 const ping = require('pull-ping');
 const stats = require('statistics');
 const fs = require('fs');
 const path = require('path');
 
-function isFunction(f: any): f is Function {
-  return 'function' === typeof f;
-}
-
-function stringify(peer: Peer | string): string {
-  //#region MODIFIED
-  if (typeof peer === 'string') return peer;
-  return [peer.source, peer.host, peer.port, peer.key].join(':');
-  //#endregion
-}
-
 function isPeerObject(o: any): o is Peer {
   return o && 'object' == typeof o;
 }
 
 function toBase64(s: any): string {
-  if (isString(s)) return s.substring(1, s.indexOf('.'));
+  if (typeof s === 'string') return s.substring(1, s.indexOf('.'));
   else return s.toString('base64'); //assume a buffer
-}
-
-function isString(s: any): s is string {
-  return 'string' == typeof s;
 }
 
 function toAddressString(address: Peer | string): string {
   if (isPeerObject(address)) {
     if (ref.isAddress(address.address)) return address.address!;
-    //#region MODIFIED
     if (address.source === 'dht') {
       return (
         ['dht', address.host].join(':') + '~' + 'noauth'
@@ -51,7 +36,6 @@ function toAddressString(address: Peer | string): string {
         ['shs', toBase64(address.key)].join(':')
       );
     }
-    //#endregion
     let protocol = 'net';
     if (address.host && address.host.endsWith('.onion')) protocol = 'onion';
     return (
@@ -63,34 +47,8 @@ function toAddressString(address: Peer | string): string {
   return address;
 }
 
-/*
-Peers : [{
-  //modern:
-  address: <multiserver address>,
-
-
-  //legacy
-  key: id,
-  host: ip,
-  port: int,
-
-  //to be backwards compatible with patchwork...
-  announcers: {length: int}
-  //TODO: availability
-  //availability: 0-1, //online probability estimate
-
-  //where this peer was added from. TODO: remove "pub" peers.
-  source: 'pub'|'manual'|'local'
-}]
-*/
-
-//#region MODIFIED
 function isDhtAddress(addr: any) {
   return typeof addr === 'string' && addr.substr(0, 4) === 'dht:';
-}
-
-function isBluetoothAddress(addr: any) {
-  return typeof addr === 'string' && addr.substr(0, 3) === 'bt:';
 }
 
 function parseDhtAddress(addr: string): Peer {
@@ -105,22 +63,40 @@ function parseDhtAddress(addr: string): Peer {
   };
 }
 
-function parseBluetoothAddress(addr: string): Peer {
-  const [transport, transform] = addr.split('~');
+function parseAddress(address: string) {
+  if (isDhtAddress(address)) {
+    return parseDhtAddress(address);
+  } else {
+    return ref.parseAddress(address);
+  }
+}
 
-  const [btTag, addrWithoutColons] = transport.split(':');
-  const [shsTag, remoteId] = transform.split(':');
-  if (btTag !== 'bt') throw new Error('Invalid BT address ' + addr);
-  if (shsTag !== 'shs') throw new Error('Invalid BT (SHS) address ' + addr);
-
+function simplifyPeerForStatus(peer: Peer) {
   return {
-    host: addrWithoutColons,
-    port: 0,
-    key: remoteId[0] === '@' ? remoteId : '@' + remoteId,
-    source: 'bt',
+    address: peer.address || toAddressString(peer),
+    source: peer.source,
+    state: peer.state,
+    stateChange: peer.stateChange,
+    failure: peer.failure,
+    client: peer.client,
+    stats: {
+      duration: peer.duration || undefined,
+      rtt: peer.ping ? peer.ping.rtt : undefined,
+      skew: peer.ping ? peer.ping.skew : undefined,
+    },
   };
 }
-//#endregion
+
+function validateAddr(addr: Peer | string): [string, any] {
+  if (!addr || (typeof addr !== 'object' && typeof addr !== 'string')) {
+    throw new Error('address should be an object or string');
+  }
+  const addressString = typeof addr === 'string' ? addr : toAddressString(addr);
+  const parsed = typeof addr === 'object' ? addr : parseAddress(addressString);
+  if (!parsed.key) throw new Error('address must have ed25519 key');
+  if (!ref.isFeed(parsed.key)) throw new Error('key must be ed25519 public id');
+  return [addressString, parsed];
+}
 
 module.exports = {
   name: 'gossip',
@@ -130,11 +106,11 @@ module.exports = {
     connect: 'async',
     remove: 'sync',
     reconnect: 'sync',
-    enable: 'sync',
-    disable: 'sync',
     peers: 'sync',
     changes: 'source',
     ping: 'duplex',
+    enable: 'sync',
+    disable: 'sync',
   },
   permissions: {
     anonymous: {allow: ['ping']},
@@ -144,44 +120,30 @@ module.exports = {
     let closeScheduler: any;
 
     const connDB = new ConnDB({path: config.path, writeTimeout: 10e3});
+    const connHub = new ConnHub(server);
 
     const status: Record<string, Peer> = {};
 
-    // In-memory mirror of conn-db and (yet to be built) in-memory conn-hub db:
-    const peers: Array<Peer> = [];
-
-    function getPeer(id: string): Peer | undefined {
-      return peers.find(e => e && e.key === id);
-    }
-
-    function simplify(peer: Peer) {
-      return {
-        address: peer.address || toAddressString(peer),
-        source: peer.source,
-        state: peer.state,
-        stateChange: peer.stateChange,
-        failure: peer.failure,
-        client: peer.client,
-        stats: {
-          duration: peer.duration || undefined,
-          rtt: peer.ping ? peer.ping.rtt : undefined,
-          skew: peer.ping ? peer.ping.skew : undefined,
-        },
-      };
-    }
-
+    // Add peer metadata (for all peers) to the ssb-server status API
     server.status.hook(function(fn: Function) {
       const _status = fn();
       _status.gossip = status;
-      peers.forEach(peer => {
-        if (peer.stateChange! + 3e3 > Date.now() || peer.state === 'connected')
-          status[peer.key!] = simplify(peer);
-      });
+      for (let [address, data] of connDB.entries()) {
+        const state = connHub.getState(address);
+        if (state === 'connected' || data.stateChange! + 3e3 > Date.now()) {
+          if (data.key) {
+            status[data.key] = simplifyPeerForStatus({...data, state});
+          }
+        }
+      }
       return _status;
     });
 
     server.close.hook(function(this: any, fn: Function, args: Array<any>) {
-      closeScheduler();
+      closeScheduler && closeScheduler();
+      // TODO connDB.close() so that tests dont linger for 10 sec
+
+      // TODO remove this because it seems like secret-stack does this already
       for (let id in server.peers)
         server.peers[id].forEach((peer: any) => {
           peer.close(true);
@@ -189,356 +151,276 @@ module.exports = {
       return fn.apply(this, args);
     });
 
-    const timer_ping = 5 * 6e4;
-
     function setConfig(name: string, value: any) {
+      // Update in-memory config
       config.gossip = config.gossip || {};
       config.gossip[name] = value;
 
+      // Update file system config
       const cfgPath = path.join(config.path, 'config');
-      let existingConfig: any = {};
-
-      // load ~/.ssb/config
+      let configInFS: any = {};
       try {
-        existingConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+        configInFS = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
       } catch (e) {}
-
-      // update the plugins config
-      existingConfig.gossip = existingConfig.gossip || {};
-      existingConfig.gossip[name] = value;
-
-      // write to disc
-      fs.writeFileSync(
-        cfgPath,
-        JSON.stringify(existingConfig, null, 2),
-        'utf-8',
-      );
+      configInFS.gossip = configInFS.gossip || {};
+      configInFS.gossip[name] = value;
+      fs.writeFileSync(cfgPath, JSON.stringify(configInFS, null, 2), 'utf-8');
     }
 
     var gossip = {
       wakeup: 0,
+
       peers: function() {
-        return peers;
+        return Array.from(connDB.entries()).map(([address, data]) => ({
+          ...data,
+          address,
+        }));
       },
+
+      // Is this API used 'externally' somehow? We don't use this internally,
+      // but it's still used in tests so let's implement it anyway.
       get: function(addr: Peer | string) {
-        //addr = ref.parseAddress(addr)
         if (ref.isFeed(addr)) {
-          return getPeer(addr as string);
-        } else if (ref.isFeed((addr as Peer).key!)) {
-          return getPeer((addr as Peer).key!);
-        } else {
-          throw new Error('must provide id:' + JSON.stringify(addr));
-        }
-      },
-      connect: function(addr: Peer | string, cb: Callback<any>) {
-        server.emit('log:info', ['ssb-server', stringify(addr), 'CONNECTING']);
-        if (ref.isFeed(addr)) addr = gossip.get(addr)!;
-        //#region MODIFIED
-        if (isDhtAddress(addr)) {
-          addr = parseDhtAddress(addr as string);
-        } else if (isBluetoothAddress(addr)) {
-          addr = parseBluetoothAddress(addr as string);
-        } else if (typeof addr === 'string') {
-          addr = ref.parseAddress(addr);
-        }
-        if (!addr || typeof addr != 'object')
-          return cb(new Error('first param must be an address'));
-        //#endregion
-
-        if (!addr.key) return cb(new Error('address must have ed25519 key'));
-        // add peer to the table, incase it isn't already.
-        gossip.add(addr, addr.source || 'manual');
-        const maybePeer = gossip.get(addr);
-        if (!maybePeer) return cb();
-        const p = maybePeer!;
-
-        p.stateChange = Date.now();
-        p.state = 'connecting';
-        const addressString = toAddressString(p);
-        connDB.update(addressString, {
-          stateChange: p.stateChange,
-        });
-        server.connect(addressString, (err: any, rpc: any) => {
-          //#region MODIFIED
-          if (err && err.message && /Already connected/.test(err.message)) {
-            delete p.error;
-            p.state = 'connected';
-            p.failure = 0;
-            connDB.update(addressString, {
-              failure: p.failure,
-            });
-            notify({type: 'connect', peer: p});
-          } else if (err) {
-            //#endregion
-            p.error = err.stack;
-            p.state = undefined;
-            p.failure = (p.failure || 0) + 1;
-            p.stateChange = Date.now();
-            p.duration = stats(p.duration, 0);
-            connDB.update(addressString, {
-              error: p.error,
-              failure: p.failure,
-              stateChange: p.stateChange,
-              duration: p.duration,
-            });
-            notify({type: 'connect-failure', peer: p});
-            server.emit('log:info', [
-              'ssb-server',
-              stringify(p),
-              'ERR',
-              err.message || err,
-            ]);
-            return cb && cb(err);
-          } else {
-            delete p.error;
-            p.state = 'connected';
-            p.failure = 0;
-            connDB.update(addressString, {
-              error: p.error,
-              failure: p.failure,
-            });
-            //#region MODIFIED
-            notify({type: 'connect', peer: p});
-            //#endregion
+          for (let [address, data] of connDB.entries()) {
+            if (data.key === addr) {
+              return {...data, address};
+            }
           }
-          cb && cb(null, rpc);
-        });
+          return undefined;
+        }
+        const [addressString] = validateAddr(addr);
+        const peer = connDB.get(addressString);
+        if (!peer) return undefined;
+        else {
+          const [address, data] = peer;
+          return {...data, address};
+        }
       },
 
-      disconnect: valid.async(function(addr: Peer | string, cb: any) {
-        const peer = gossip.get(addr);
-        if (!peer) return;
-
-        const addressString = toAddressString(peer);
-        peer.state = 'disconnecting';
-        peer.stateChange = Date.now();
-        connDB.update(addressString, {
-          stateChange: peer.stateChange,
-        });
-        if (!peer || !peer.disconnect) {
-          cb && cb();
-        } else {
-          peer.disconnect(true, (_err: any) => {
-            peer.stateChange = Date.now();
-            connDB.update(addressString, {
-              stateChange: peer.stateChange,
-            });
-            cb && cb();
-          });
+      connect: (addr: Peer | string, cb: Callback<any>) => {
+        let addressString: string;
+        try {
+          [addressString] = validateAddr(addr);
+        } catch (err) {
+          return cb(err);
         }
-      }, 'string|object'),
+
+        gossip.add(addressString, 'manual');
+
+        connHub
+          .connect(addressString)
+          .then(result => cb && cb(null, result), err => cb && cb(err));
+      },
+
+      disconnect: (addr: Peer | string, cb: any) => {
+        let addressString: string;
+        try {
+          [addressString] = validateAddr(addr);
+        } catch (err) {
+          return cb(err);
+        }
+
+        connHub
+          .disconnect(addressString)
+          .then(() => cb && cb(), err => cb && cb(err));
+      },
 
       changes: function() {
         return notify.listen();
       },
-      //add an address to the peer table.
-      add: valid.sync(
-        function(addr: Peer | string, source: Peer['source']) {
-          //#region MODIFIED
-          const addressString = toAddressString(addr);
-          if (isDhtAddress(addr)) {
-            addr = parseDhtAddress(addr as string);
-          } else if (isBluetoothAddress(addr)) {
-            addr = parseBluetoothAddress(addr as string);
-          } else if (typeof addr === 'string') {
-            addr = ref.parseAddress(addr);
-          } else if (!addr || (addr.source !== 'dht' && addr.source !== 'bt')) {
-            if (!ref.isAddress(addr))
-              throw new Error('not a valid address:' + JSON.stringify(addr));
-          }
-          //#endregion
-          const peerToAdd = addr as Peer;
-          peerToAdd.address = addressString;
-          // check that this is a valid address, and not pointing at self.
 
-          if (peerToAdd.key === server.id) return;
+      add: (addr: Peer | string, source: Peer['source']) => {
+        const [addressString, parsed] = validateAddr(addr);
+        if (parsed.key === server.id) return;
 
-          const existingPeer = gossip.get(addr);
-
-          if (!existingPeer) {
-            // new peer
-            peerToAdd.source = source;
-            peerToAdd.announcers = 1;
-            peerToAdd.duration = peerToAdd.duration || (0 as any);
-            Object.assign(peerToAdd, connDB.get(addressString));
-            if (source !== 'local') {
-              connDB.set(addressString, {
-                host: peerToAdd.host,
-                port: peerToAdd.port,
-                key: peerToAdd.key,
-                source: peerToAdd.source,
-                announcers: peerToAdd.announcers,
-                duration: peerToAdd.duration,
-              });
-            }
-            peers.push(peerToAdd);
-            notify({
-              type: 'discover',
-              peer: peerToAdd,
-              source: source || 'manual',
+        const existingPeer = connDB.get(addressString);
+        if (!existingPeer) {
+          if (source !== 'local') {
+            connDB.set(addressString, {
+              host: parsed.host,
+              port: parsed.port,
+              key: parsed.key,
+              address: addressString,
+              source: source,
+              announcers: 1,
+              duration: 0,
             });
-            return peerToAdd;
-          } else {
-            if (source === 'friends' || source === 'local') {
-              // this peer is a friend or local,
-              // override old source to prioritize gossip
-              existingPeer.source = source;
-              connDB.update(addressString, {
-                source: existingPeer.source,
-              });
-            } else if (existingPeer.source !== 'local') {
-              //don't count local over and over
-              existingPeer.announcers!++;
-              connDB.update(addressString, {
-                announcers: existingPeer.announcers,
-              });
-            }
-
-            return existingPeer;
           }
-        },
-        'string|object',
-        'string?',
-      ),
-      remove: function(addr: Peer | string) {
-        const peer = gossip.get(addr);
-        if (!peer) return;
-        const index = peers.indexOf(peer!);
-        if (~index) {
-          peers.splice(index, 1);
-          connDB.delete(toAddressString(peer));
-          notify({type: 'remove', peer: peer});
+          notify({type: 'discover', peer: parsed, source: source || 'manual'});
+          return connDB.get(addressString) || parsed;
+        } else {
+          if (source === 'friends' || source === 'local') {
+            // this peer is a friend or local,
+            // override old source to prioritize gossip
+            connDB.update(addressString, {source});
+          } else if (existingPeer.source === 'local') {
+            throw new Error('unexpected local peer stored in conn-db');
+          } else {
+            connDB.update(addressString, (prev: any) => ({
+              announcers: prev.announcers + 1,
+            }));
+          }
+
+          return connDB.get(addressString);
         }
       },
-      ping: function() {
+
+      remove: (addr: Peer | string) => {
+        const [addressString] = validateAddr(addr);
+
+        const peer = connDB.get(addressString);
+        if (!peer) return;
+        // TODO are we sure that connHub.disconnect() mirrors ssb-gossip?
+        connHub.disconnect(addressString);
+        connDB.delete(addressString);
+        notify({type: 'remove', peer: peer});
+      },
+
+      ping: () => {
         let timeout = (config.timers && config.timers.ping) || 5 * 60e3;
         //between 10 seconds and 30 minutes, default 5 min
         timeout = Math.max(10e3, Math.min(timeout, 30 * 60e3));
-        return ping({timeout: timeout});
+        return ping({timeout});
       },
-      reconnect: function() {
-        for (var id in server.peers)
-          if (id !== server.id)
-            //don't disconnect local client
-            server.peers[id].forEach((peer: any) => {
-              peer.close(true);
-            });
+
+      reconnect: () => {
+        connHub.reset();
         return (gossip.wakeup = Date.now());
       },
-      enable: valid.sync(function(type: string) {
-        type = type || 'global';
-        setConfig(type, true);
-        if (type === 'local' && server.local && server.local.init) {
+
+      enable: (type: string) => {
+        if (!!type && typeof type !== 'string') {
+          throw new Error('enable() expects an optional string as argument');
+        }
+
+        const actualType = type || 'global';
+        setConfig(actualType, true);
+        if (actualType === 'local' && server.local && server.local.init) {
           server.local.init();
         }
-        return 'enabled gossip type ' + type;
-      }, 'string?'),
-      disable: valid.sync(function(type: string) {
-        type = type || 'global';
-        setConfig(type, false);
-        return 'disabled gossip type ' + type;
-      }, 'string?'),
+        return 'enabled gossip type ' + actualType;
+      },
+
+      disable: (type: string) => {
+        if (!!type && typeof type !== 'string') {
+          throw new Error('disable() expects an optional string as argument');
+        }
+
+        const actualType = type || 'global';
+        setConfig(actualType, false);
+        return 'disabled gossip type ' + actualType;
+      },
     };
 
-    server.on('rpc:connect', function onRpcConnect(
-      rpc: any,
-      isClient: boolean,
-    ) {
-      // if we're not ready, close this connection immediately
-      if (!server.ready() && rpc.id !== server.id) return rpc.close();
+    function onConnecting(ev: HubEvent) {
+      connDB.update(ev.address, {
+        stateChange: Date.now(),
+      });
+      server.emit('log:info', ['ssb-server', ev.address, 'CONNECTING']);
+    }
 
-      const peer = getPeer(rpc.id);
-      //#region MODIFIED
-      rpc._connectRetries = rpc._connectRetries || 0;
-      if (!peer && isClient && rpc._connectRetries < 4) {
-        setTimeout(() => {
-          onRpcConnect(rpc, isClient);
-        }, 200);
-        rpc._connectRetries += 1;
-        return;
-      }
-      //#endregion
-      //don't track clients that connect, but arn't considered peers.
-      //maybe we should though?
-      else if (!peer) {
-        if (rpc.id !== server.id) {
-          server.emit('log:info', ['ssb-server', rpc.id, 'Connected']);
-          rpc.on('closed', () => {
-            server.emit('log:info', ['ssb-server', rpc.id, 'Disconnected']);
-          });
-        }
-        return;
-      }
-
-      status[rpc.id] = simplify(peer);
-
-      server.emit('log:info', ['ssb-server', stringify(peer), 'PEER JOINED']);
-      //means that we have created this connection, not received it.
-      peer.client = !!isClient;
-      peer.state = 'connected';
-      peer.stateChange = Date.now();
-      peer.disconnect = (err: any, cb: Callback<any>) => {
-        if (isFunction(err)) (cb = err), (err = null);
-        rpc.close(err, cb);
+    function onConnectingFailed(ev: HubEvent) {
+      connDB.update(ev.address, (prev: any) => ({
+        failure: (prev.failure || 0) + 1,
+        stateChange: Date.now(),
+        duration: stats(prev.duration, 0),
+      }));
+      const peer = {
+        state: ev.type,
+        address: ev.address,
+        key: ev.key,
+        ...connDB.get(ev.address),
       };
-      connDB.update(toAddressString(peer), {
-        client: peer.client,
-        stateChange: peer.stateChange,
-      });
+      notify({type: 'connect-failure', peer});
+      const err = (ev.details && ev.details.message) || ev.details;
+      server.emit('log:info', ['ssb-server', ev.address, 'ERR', err]);
+    }
 
-      if (isClient) {
-        //default ping is 5 minutes...
-        const pp = ping({serve: true, timeout: timer_ping}, () => {});
-        peer.ping = {rtt: pp.rtt, skew: pp.skew};
-        connDB.update(toAddressString(peer), {
-          ping: peer.ping,
-        });
-        pull(
-          pp,
-          rpc.gossip.ping({timeout: timer_ping}, (err: any) => {
-            if (err.name === 'TypeError') {
-              peer.ping!.fail = true;
-              connDB.update(toAddressString(peer), {
-                ping: peer.ping,
-              });
-            }
-          }),
-          pp,
-        );
+    function onConnected(ev: HubEvent) {
+      connDB.update(ev.address, {
+        stateChange: Date.now(),
+        failure: 0,
+      });
+      const peer = {
+        state: ev.type,
+        address: ev.address,
+        key: ev.key,
+        ...connDB.get(ev.address),
+      };
+      if (ev.key) {
+        status[ev.key] = simplifyPeerForStatus(peer);
       }
+      server.emit('log:info', ['ssb-server', ev.address, 'PEER JOINED']);
+      notify({type: 'connect', peer});
+    }
 
-      rpc.on('closed', () => {
-        delete status[rpc.id];
-        server.emit('log:info', [
-          'ssb-server',
-          stringify(peer),
-          [
-            'DISCONNECTED. state was',
-            peer.state,
-            'for',
-            (Date.now() - peer.stateChange!) / 1000,
-            'seconds',
-          ].join(' '),
-        ]);
-        //track whether we have successfully connected.
-        //or how many failures there have been.
-        const since = peer.stateChange!;
-        peer.stateChange = Date.now();
-        //      if(peer.state === 'connected') //may be "disconnecting"
-        peer.duration = stats(peer.duration, peer.stateChange - since);
-        peer.state = undefined;
-        connDB.update(toAddressString(peer), {
-          stateChange: peer.stateChange,
-          duration: peer.duration,
-        });
-        notify({type: 'disconnect', peer: peer});
+    function onDisconnecting(ev: HubEvent) {
+      connDB.update(ev.address, {
+        stateChange: Date.now(),
       });
+    }
 
-      notify({type: 'connect', peer: peer});
-    });
+    function onDisconnectingFailed(_ev: HubEvent) {
+      // ssb-gossip does not handle this case
+    }
+
+    function onDisconnected(ev: HubEvent) {
+      connDB.update(ev.address, (prev: any) => ({
+        stateChange: Date.now(),
+        duration: stats(prev.duration, Date.now() - prev.stateChange),
+      }));
+      const peer = {
+        state: ev.type,
+        address: ev.address,
+        key: ev.key,
+        ...connDB.get(ev.address),
+      };
+      if (ev.key) {
+        delete status[ev.key];
+      }
+      server.emit('log:info', [
+        'ssb-server',
+        ev.address,
+        [
+          'DISCONNECTED. state was',
+          peer.state,
+          'for',
+          (Date.now() - peer.stateChange!) / 1000,
+          'seconds',
+        ].join(' '),
+      ]);
+      notify({type: 'disconnect', peer});
+    }
+
+    function onPing(ev: HubEvent) {
+      const pp = ev.details;
+      connDB.update(ev.address, {ping: {rtt: pp.rtt, skew: pp.skew}});
+    }
+
+    function onPingFailed(ev: HubEvent) {
+      if (ev.details.name === 'TypeError') {
+        connDB.update(ev.address, (prev: any) => ({
+          ping: {...(prev.ping || {}), fail: true},
+        }));
+      }
+    }
+
+    pull(
+      connHub.listen(),
+      pull.drain((ev: HubEvent) => {
+        if (ev.type === 'connecting') onConnecting(ev);
+        if (ev.type === 'connecting-failed') onConnectingFailed(ev);
+        if (ev.type === 'connected') onConnected(ev);
+        if (ev.type === 'disconnecting') onDisconnecting(ev);
+        if (ev.type === 'disconnecting-failed') onDisconnectingFailed(ev);
+        if (ev.type === 'disconnected') onDisconnected(ev);
+        if (ev.type === 'ping') onPing(ev);
+        if (ev.type === 'ping-failed') onPingFailed(ev);
+      }),
+    );
 
     connDB.loaded().then(() => {
-      closeScheduler = Schedule(gossip, config, server);
+      closeScheduler = Schedule(config, server, connDB, connHub);
       Init(gossip, config, server);
       for (let [address, data] of connDB.entries()) {
         if (data.source === 'dht') {
