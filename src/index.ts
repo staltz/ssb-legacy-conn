@@ -142,12 +142,6 @@ module.exports = {
     server.close.hook(function(this: any, fn: Function, args: Array<any>) {
       closeScheduler && closeScheduler();
       connDB.close();
-
-      // TODO remove this because it seems like secret-stack does this already
-      for (let id in server.peers)
-        server.peers[id].forEach((peer: any) => {
-          peer.close(true);
-        });
       return fn.apply(this, args);
     });
 
