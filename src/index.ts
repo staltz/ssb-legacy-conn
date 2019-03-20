@@ -165,10 +165,9 @@ module.exports = {
       wakeup: 0,
 
       peers: function() {
-        return Array.from(connDB.entries()).map(([address, data]) => ({
-          ...data,
-          address,
-        }));
+        return Array.from(connDB.entries()).map(([address, data]) => {
+          return {...data, address, state: connHub.getState(address)};
+        });
       },
 
       // Is this API used 'externally' somehow? We don't use this internally,
@@ -187,7 +186,7 @@ module.exports = {
         if (!peer) return undefined;
         else {
           const [address, data] = peer;
-          return {...data, address};
+          return {...data, address, state: connHub.getState(address)};
         }
       },
 
