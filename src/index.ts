@@ -167,9 +167,25 @@ module.exports = {
       wakeup: 0,
 
       peers: function() {
-        return Array.from(connDB.entries()).map(([address, data]) => {
+        const peers = Array.from(connDB.entries()).map(([address, data]) => {
           return {...data, address, state: connHub.getState(address)};
         });
+
+        // Add peers that are connected but are not in the cold database
+        for (const [address, data] of connHub.entries()) {
+          if (!connDB.has(address)) {
+            // We ASSUME this `address` is never a pub
+            const source: Peer['source'] = address.startsWith('net:')
+              ? 'local'
+              : address.startsWith('bt:')
+              ? 'bt'
+              : 'manual';
+            const [, parsed] = validateAddr(address);
+            peers.push({...data, ...parsed, address, source});
+          }
+        }
+
+        return peers;
       },
 
       // Is this API used 'externally' somehow? We don't use this internally,
