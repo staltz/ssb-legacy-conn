@@ -254,7 +254,11 @@ module.exports = {
             announcers: 1,
             duration: 0,
           });
-          notify({type: 'discover', peer: parsed, source: source || 'manual'});
+          notify({
+            type: 'discover',
+            peer: {...parsed, state: connHub.getState(addressString)},
+            source: source || 'manual',
+          });
           return parsed;
         }
 
@@ -269,7 +273,11 @@ module.exports = {
             announcers: 1,
             duration: 0,
           });
-          notify({type: 'discover', peer: parsed, source: source || 'manual'});
+          notify({
+            type: 'discover',
+            peer: {...parsed, state: connHub.getState(addressString)},
+            source: source || 'manual',
+          });
           return connDB.get(addressString) || parsed;
         } else {
           // Upgrade the priority to friend
