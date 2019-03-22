@@ -99,6 +99,15 @@ function validateAddr(addr: Peer | string): [string, any] {
   return [addressString, parsed];
 }
 
+function inferSource(address: string): Peer['source'] {
+  // We ASSUME this `address` is NOT in conn-db and is NOT a pub
+  return address.startsWith('net:')
+    ? 'local'
+    : address.startsWith('bt:')
+    ? 'bt'
+    : 'manual';
+}
+
 module.exports = {
   name: 'gossip',
   version: '1.0.0',
@@ -174,14 +183,13 @@ module.exports = {
         // Add peers that are connected but are not in the cold database
         for (const [address, data] of connHub.entries()) {
           if (!connDB.has(address)) {
-            // We ASSUME this `address` is never a pub
-            const source: Peer['source'] = address.startsWith('net:')
-              ? 'local'
-              : address.startsWith('bt:')
-              ? 'bt'
-              : 'manual';
             const [, parsed] = validateAddr(address);
-            peers.push({...data, ...parsed, address, source});
+            peers.push({
+              ...data,
+              ...parsed,
+              address,
+              source: inferSource(address),
+            });
           }
         }
 
@@ -393,12 +401,12 @@ module.exports = {
         key: ev.key,
         ...connDB.get(ev.address),
       };
+      if (!connDB.has(ev.address)) peer.source = inferSource(ev.address);
       if (ev.key) {
         status[ev.key] = simplifyPeerForStatus(peer);
       }
       server.emit('log:info', ['ssb-server', ev.address, 'PEER JOINED']);
       notify({type: 'connect', peer});
-
       if (ev.details.isClient) setupPing(ev.address, ev.details.rpc);
     }
 
