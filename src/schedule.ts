@@ -1,6 +1,7 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
+import ConnStaging = require('./staging/index');
 import {Peer} from './types';
 const pull = require('pull-stream');
 const ip = require('ip');
@@ -43,7 +44,7 @@ function peerNext(peer: Peer, opts: any) {
 
 function isOffline(p: Peer) {
   if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
-  else if (p.source === "bt") return false;
+  else if (p.source === 'bt') return false;
   else return !hasNetwork();
 }
 
@@ -123,11 +124,21 @@ function makeSelect(connHub: ConnHub) {
   };
 }
 
+function convertModeToLegacySource(
+  mode: 'lan' | 'bt' | 'internet',
+): Peer['source'] {
+  if (mode === 'lan') return 'local';
+  if (mode === 'bt') return 'bt';
+  if (mode === 'internet') return 'pub';
+  return 'stored';
+}
+
 export = function Schedule(
   config: any,
   server: any,
   connDB: ConnDB,
   connHub: ConnHub,
+  connStaging: ConnStaging,
 ) {
   const min = 60e3;
   const hour = 60 * 60e3;
@@ -193,9 +204,20 @@ export = function Schedule(
       if (!server.ready() || isCurrentlyDownloading()) return;
 
       const ts = Date.now();
-      const peers: Array<Peer> = Array.from(connDB.entries()).map(
-        ([address, data]) => ({...data, address}),
-      );
+      const peers: Array<Peer> = ([] as Array<Peer>)
+        .concat(
+          Array.from(connDB.entries()).map(([address, data]) => ({
+            ...data,
+            address,
+          })),
+        )
+        .concat(
+          Array.from(connStaging.entries()).map(([address, data]) => ({
+            ...data,
+            address,
+            source: convertModeToLegacySource(data.mode) as Peer['source'],
+          })),
+        );
 
       const connected = peers.filter(
         and(isConnect, not(isLocal), not(isFriend)),

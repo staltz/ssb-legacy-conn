@@ -1,5 +1,6 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
+import ConnStaging = require('./staging/index');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import Schedule = require('./schedule');
 import Init = require('./init');
@@ -121,6 +122,7 @@ module.exports = {
 
     const connDB = new ConnDB({path: config.path, writeTimeout: 10e3});
     const connHub = new ConnHub(server);
+    const connStaging = new ConnStaging(connHub);
 
     const status: Record<string, Peer> = {};
 
@@ -226,34 +228,42 @@ module.exports = {
         const [addressString, parsed] = validateAddr(addr);
         if (parsed.key === server.id) return;
 
+        if (source === 'local') {
+          connStaging.stage(addressString, {
+            mode: 'lan',
+            host: parsed.host,
+            port: parsed.port,
+            key: parsed.key,
+            address: addressString,
+            announcers: 1,
+            duration: 0,
+          });
+          notify({type: 'discover', peer: parsed, source: source || 'manual'});
+          return parsed;
+        }
+
         const existingPeer = connDB.get(addressString);
         if (!existingPeer) {
-          if (source !== 'local') {
-            connDB.set(addressString, {
-              host: parsed.host,
-              port: parsed.port,
-              key: parsed.key,
-              address: addressString,
-              source: source,
-              announcers: 1,
-              duration: 0,
-            });
-          }
+          connDB.set(addressString, {
+            host: parsed.host,
+            port: parsed.port,
+            key: parsed.key,
+            address: addressString,
+            source: source,
+            announcers: 1,
+            duration: 0,
+          });
           notify({type: 'discover', peer: parsed, source: source || 'manual'});
           return connDB.get(addressString) || parsed;
         } else {
-          if (source === 'friends' || source === 'local') {
-            // this peer is a friend or local,
-            // override old source to prioritize gossip
+          // Upgrade the priority to friend
+          if (source === 'friends') {
             connDB.update(addressString, {source});
-          } else if (existingPeer.source === 'local') {
-            throw new Error('unexpected local peer stored in conn-db');
           } else {
             connDB.update(addressString, (prev: any) => ({
               announcers: prev.announcers + 1,
             }));
           }
-
           return connDB.get(addressString);
         }
       },
@@ -261,10 +271,12 @@ module.exports = {
       remove: (addr: Peer | string) => {
         const [addressString] = validateAddr(addr);
 
-        const peer = connDB.get(addressString);
-        if (!peer) return;
         // TODO are we sure that connHub.disconnect() mirrors ssb-gossip?
         connHub.disconnect(addressString);
+        connStaging.unstage(addressString);
+
+        const peer = connDB.get(addressString);
+        if (!peer) return;
         connDB.delete(addressString);
         notify({type: 'remove', peer: peer});
       },
@@ -417,7 +429,7 @@ module.exports = {
     );
 
     connDB.loaded().then(() => {
-      closeScheduler = Schedule(config, server, connDB, connHub);
+      closeScheduler = Schedule(config, server, connDB, connHub, connStaging);
       Init(gossip, config, server);
       for (let [address, data] of connDB.entries()) {
         if (data.source === 'dht') {

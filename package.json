@@ -11,6 +11,8 @@
   "dependencies": {
     "has-network": "0.0.1",
     "ip": "^1.1.5",
+    "debug": "~4.1.1",
+    "multiserver-address": "~1.0.1",
     "on-change-network": "0.0.2",
     "on-wakeup": "^1.0.1",
     "pull-notify": "^0.1.1",
