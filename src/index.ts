@@ -264,7 +264,11 @@ module.exports = {
           });
           notify({
             type: 'discover',
-            peer: {...parsed, state: connHub.getState(addressString)},
+            peer: {
+              ...parsed,
+              state: connHub.getState(addressString),
+              source: source || 'manual',
+            },
             source: source || 'manual',
           });
           return parsed;
@@ -283,7 +287,11 @@ module.exports = {
           });
           notify({
             type: 'discover',
-            peer: {...parsed, state: connHub.getState(addressString)},
+            peer: {
+              ...parsed,
+              state: connHub.getState(addressString),
+              source: source || 'manual',
+            },
             source: source || 'manual',
           });
           return connDB.get(addressString) || parsed;
