@@ -1,6 +1,6 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
-import ConnStaging = require('./staging/index');
+import ConnStaging = require('ssb-conn-staging');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import Schedule = require('./schedule');
 import Init = require('./init');

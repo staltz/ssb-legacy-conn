@@ -1,7 +1,7 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
-import ConnStaging = require('./staging/index');
+import ConnStaging = require('ssb-conn-staging');
 import {Peer} from './types';
 const pull = require('pull-stream');
 const ip = require('ip');
