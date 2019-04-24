@@ -364,7 +364,7 @@ module.exports = {
       pull(
         pp,
         rpc.gossip.ping({timeout: PING_TIMEOUT}, (err: any) => {
-          if (err.name === 'TypeError') {
+          if (err && err.name === 'TypeError') {
             connDB.update(address, (prev: any) => ({
               ping: {...(prev.ping || {}), fail: true},
             }));
