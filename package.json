@@ -18,7 +18,7 @@
     "pull-notify": "^0.1.1",
     "pull-ping": "^2.0.2",
     "pull-stream": "^3.6.9",
-    "ssb-conn-db": "0.0.8",
+    "ssb-conn-db": "0.1.0",
     "ssb-conn-hub": "0.0.3",
     "ssb-conn-staging": "0.0.1",
     "ssb-ref": "^2.13.9",
