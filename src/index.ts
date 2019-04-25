@@ -121,14 +121,16 @@ module.exports = {
   version: '1.0.0',
   manifest: {
     add: 'sync',
-    connect: 'async',
     remove: 'sync',
+    connect: 'async',
+    disconnect: 'async',
     reconnect: 'sync',
-    peers: 'sync',
     changes: 'source',
-    ping: 'duplex',
     enable: 'sync',
     disable: 'sync',
+    ping: 'duplex',
+    peers: 'sync',
+    get: 'sync',
   },
   permissions: {
     anonymous: {allow: ['ping']},
@@ -205,7 +207,7 @@ module.exports = {
       },
 
       // Is this API used 'externally' somehow? We don't use this internally,
-      // but it's still used in tests so let's implement it anyway.
+      // but it's still used in tests and it's in the manifest
       get: function(addr: Peer | string) {
         if (ref.isFeed(addr)) {
           for (let [address, data] of connDB.entries()) {
