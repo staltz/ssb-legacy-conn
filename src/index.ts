@@ -72,6 +72,14 @@ function parseAddress(address: string) {
   }
 }
 
+function idToAddr(id: any, connDB: ConnDB) {
+  const addr = connDB.getAddressForId(id as string) as string;
+  if (!addr) {
+    throw new Error('no known address for peer:' + id);
+  }
+  return addr;
+}
+
 function simplifyPeerForStatus(peer: Peer) {
   return {
     address: peer.address || toAddressString(peer),
@@ -219,7 +227,8 @@ module.exports = {
       connect: (addr: Peer | string, cb: Callback<any>) => {
         let addressString: string;
         try {
-          [addressString] = validateAddr(addr);
+          const inputAddr = ref.isFeed(addr) ? idToAddr(addr, connDB) : addr;
+          [addressString] = validateAddr(inputAddr);
         } catch (err) {
           return cb(err);
         }
@@ -234,7 +243,8 @@ module.exports = {
       disconnect: (addr: Peer | string, cb: any) => {
         let addressString: string;
         try {
-          [addressString] = validateAddr(addr);
+          const inputAddr = ref.isFeed(addr) ? idToAddr(addr, connDB) : addr;
+          [addressString] = validateAddr(inputAddr);
         } catch (err) {
           return cb(err);
         }
