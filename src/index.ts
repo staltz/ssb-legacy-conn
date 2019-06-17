@@ -67,9 +67,13 @@ function parseDhtAddress(addr: string): Peer {
 function parseAddress(address: string) {
   if (isDhtAddress(address)) {
     return parseDhtAddress(address);
-  } else {
-    return ref.parseAddress(address);
   }
+  const legacyParsing = ref.parseAddress(address);
+  if (legacyParsing) {
+    return legacyParsing;
+  } else if (ref.isAddress(address)) {
+    return {key: ref.getKeyFromAddress(address)};
+}
 }
 
 function idToAddr(id: any, connDB: ConnDB) {
