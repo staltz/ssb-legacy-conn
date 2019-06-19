@@ -172,6 +172,7 @@ class gossip {
     this.ssb.close.hook(function(this: any, fn: Function, args: Array<any>) {
       if (that.closeScheduler) that.closeScheduler();
       that.connDB.close();
+      that.connHub.close();
       return fn.apply(this, args);
     });
   }
