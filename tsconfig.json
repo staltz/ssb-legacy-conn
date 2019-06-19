@@ -15,6 +15,7 @@
     "noImplicitReturns": true,
     "downlevelIteration": true,
     "moduleResolution": "node",
+    "experimentalDecorators": true,
     "esModuleInterop": false
   },
   "exclude": ["node_modules", "test", "lib"]
