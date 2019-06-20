@@ -131,10 +131,7 @@ class gossip {
     this.wakeup = 0;
     this.status = {};
     this.notify = Notify();
-    this.connDB = new ConnDB({
-      path: this.config.path,
-      writeTimeout: 10e3,
-    });
+    this.connDB = new ConnDB({path: this.config.path, writeTimeout: 10e3});
     this.connHub = new ConnHub(this.ssb);
     this.connStaging = new ConnStaging(this.connHub);
     this.closeScheduler = null;
@@ -211,6 +208,7 @@ class gossip {
     });
   }
 
+  // Only used by enable/disable
   private setConfig(name: string, value: any) {
     // Update in-memory config
     this.config.gossip = this.config.gossip || {};

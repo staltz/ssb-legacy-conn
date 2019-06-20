@@ -144,10 +144,12 @@ export = function Schedule(
   const hour = 60 * 60e3;
   let closed = false;
 
-  //trigger hard reconnect after suspend or local network changes
+  // Upon wakeup, trigger hard reconnect
   onWakeup(() => connHub.reset());
+  // Upon network changes, trigger hard reconnect
   onNetwork(() => connHub.reset());
 
+  // Utility to pick from config, with some defaults
   function conf(name: any, def: any) {
     if (config.gossip == null) return def;
     var value = config.gossip[name];
@@ -157,7 +159,8 @@ export = function Schedule(
   const select = makeSelect(connHub);
   const isConnect = makeIsConnect(connHub);
 
-  function connect(
+  // Utility to connect to bunch of peers, or disconnect if over quota
+  function connectToSome(
     peers: Array<Peer>,
     ts: number,
     name: string,
@@ -183,6 +186,7 @@ export = function Schedule(
     });
   }
 
+  // Additional info that aids making queries
   var lastMessageAt: any;
   server.post(function(data: any) {
     if (data.value.author != server.id) lastMessageAt = Date.now();
@@ -194,16 +198,19 @@ export = function Schedule(
   }
 
   var connecting = false;
-  function connections() {
+  function attemptNewConnections() {
     if (connecting || closed) return;
     connecting = true;
+    // Add some time randomization
     var timer = setTimeout(function() {
       connecting = false;
 
-      // don't attempt to connect while migration is running
+      // Respect some limits: don't attempt to connect while migration is running
       if (!server.ready() || isCurrentlyDownloading()) return;
 
       const ts = Date.now();
+
+      // The total database, from which to sample
       const peers: Array<Peer> = ([] as Array<Peer>)
         .concat(
           Array.from(connDB.entries()).map(([address, data]) => ({
@@ -219,71 +226,48 @@ export = function Schedule(
           })),
         );
 
-      const connected = peers.filter(
+      const numOfConnected = peers.filter(
         and(isConnect, not(isLocal), not(isFriend)),
       ).length;
 
-      const connectedFriends = peers.filter(and(isConnect, isFriend)).length;
+      const numOfConnectedFriends = peers.filter(and(isConnect, isFriend))
+        .length;
 
       if (conf('friends', true))
-        connect(
-          peers,
-          ts,
-          'friends',
-          isFriend,
-          {
-            quota: 3,
-            factor: 2e3,
-            max: 10 * min,
-            groupMin: 1e3,
-          },
-        );
+        connectToSome(peers, ts, 'friends', isFriend, {
+          quota: 3,
+          factor: 2e3,
+          max: 10 * min,
+          groupMin: 1e3,
+        });
 
       if (conf('seed', true))
-        connect(
-          peers,
-          ts,
-          'seeds',
-          isSeed,
-          {
-            quota: 3,
-            factor: 2e3,
-            max: 10 * min,
-            groupMin: 1e3,
-          },
-        );
+        connectToSome(peers, ts, 'seeds', isSeed, {
+          quota: 3,
+          factor: 2e3,
+          max: 10 * min,
+          groupMin: 1e3,
+        });
 
       if (conf('local', true))
-        connect(
-          peers,
-          ts,
-          'local',
-          isLocal,
-          {
-            quota: 3,
-            factor: 2e3,
-            max: 10 * min,
-            groupMin: 1e3,
-          },
-        );
+        connectToSome(peers, ts, 'local', isLocal, {
+          quota: 3,
+          factor: 2e3,
+          max: 10 * min,
+          groupMin: 1e3,
+        });
 
       if (conf('global', true)) {
         // prioritize friends
-        connect(
-          peers,
-          ts,
-          'friends',
-          and(isFriend, isLongterm),
-          {
-            quota: 2,
-            factor: 10e3,
-            max: 10 * min,
-            groupMin: 5e3,
-          },
-        );
+        connectToSome(peers, ts, 'friends', and(isFriend, isLongterm), {
+          quota: 2,
+          factor: 10e3,
+          max: 10 * min,
+          groupMin: 5e3,
+        });
 
-        if (connectedFriends < 2)
-          connect(
+        if (numOfConnectedFriends < 2)
+          connectToSome(
             peers,
             ts,
             'attemptFriend',
@@ -297,22 +281,16 @@ export = function Schedule(
             },
           );
 
-        connect(
-          peers,
-          ts,
-          'retryFriends',
-          and(isFriend, isInactive),
-          {
-            min: 0,
-            quota: 3,
-            factor: 60e3,
-            max: 3 * 60 * 60e3,
-            groupMin: 5 * 60e3,
-          },
-        );
+        connectToSome(peers, ts, 'retryFriends', and(isFriend, isInactive), {
+          min: 0,
+          quota: 3,
+          factor: 60e3,
+          max: 3 * 60 * 60e3,
+          groupMin: 5 * 60e3,
+        });
 
         // standard longterm peers
-        connect(
+        connectToSome(
           peers,
           ts,
           'longterm',
@@ -325,52 +303,35 @@ export = function Schedule(
           },
         );
 
-        if (!connected)
-          connect(
-            peers,
-            ts,
-            'attempt',
-            isUnattempted,
-            {
-              min: 0,
-              quota: 1,
-              factor: 0,
-              max: 0,
-              groupMin: 0,
-            },
-          );
+        if (numOfConnected === 0)
+          connectToSome(peers, ts, 'attempt', isUnattempted, {
+            min: 0,
+            quota: 1,
+            factor: 0,
+            max: 0,
+            groupMin: 0,
+          });
 
         //quota, groupMin, min, factor, max
-        connect(
-          peers,
-          ts,
-          'retry',
-          isInactive,
-          {
-            min: 0,
-            quota: 3,
-            factor: 5 * 60e3,
-            max: 3 * 60 * 60e3,
-            groupMin: 5 * 50e3,
-          },
-        );
+        connectToSome(peers, ts, 'retry', isInactive, {
+          min: 0,
+          quota: 3,
+          factor: 5 * 60e3,
+          max: 3 * 60 * 60e3,
+          groupMin: 5 * 50e3,
+        });
 
         var longterm = peers.filter(isConnect).filter(isLongterm).length;
 
-        connect(
-          peers,
-          ts,
-          'legacy',
-          isLegacy,
-          {
-            quota: 3 - longterm,
-            factor: 5 * min,
-            max: 3 * hour,
-            groupMin: 5 * min,
-          },
-        );
+        connectToSome(peers, ts, 'legacy', isLegacy, {
+          quota: 3 - longterm,
+          factor: 5 * min,
+          max: 3 * hour,
+          groupMin: 5 * min,
+        });
       }
 
+      // Purge some ongoing frustrating connection attempts
       peers.filter(isConnect).forEach(p => {
         const permanent = isLongterm(p) || isLocal(p);
         if (
@@ -384,11 +345,12 @@ export = function Schedule(
     if (timer.unref) timer.unref();
   }
 
+  // Upon some disconnection, attempt to make connections
   pull(
     connHub.listen(),
     pull.drain(
       (ev: HubEvent) => {
-        if (ev.type == 'disconnected') connections();
+        if (ev.type == 'disconnected') attemptNewConnections();
       },
       function() {
         console.warn(
@@ -399,10 +361,12 @@ export = function Schedule(
     ),
   );
 
-  var int = setInterval(connections, 2e3);
+  // Upon regular time intervals, attempt to make connections
+  var int = setInterval(attemptNewConnections, 2e3);
   if (int.unref) int.unref();
 
-  connections();
+  // Upon init, attempt to make some connections
+  attemptNewConnections();
 
   return function onClose() {
     closed = true;
