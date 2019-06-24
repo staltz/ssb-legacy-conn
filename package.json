@@ -24,7 +24,8 @@
     "secret-stack-decorators": "1.0.0",
     "ssb-ref": "^2.13.9",
     "ssb-typescript": "^1.4.0",
-    "statistics": "^3.3.0"
+    "statistics": "^3.3.0",
+    "zii": "~1.1.0"
   },
   "peerDependencies": {
     "secret-stack": ">=6.2.0"

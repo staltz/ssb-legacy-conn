@@ -4,6 +4,7 @@ import ConnStaging = require('ssb-conn-staging');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import {Callback, Peer} from './types';
 import {plugin, muxrpc} from 'secret-stack-decorators';
+import {ConnQuery} from './query';
 const pull = require('pull-stream');
 const Notify = require('pull-notify');
 const ref = require('ssb-ref');
@@ -121,6 +122,7 @@ export class Gossip {
   private connDB: ConnDB;
   private connHub: ConnHub;
   private connStaging: ConnStaging;
+  private connQuery: ConnQuery;
 
   constructor(ssb: any, cfg: any) {
     this.ssb = ssb;
@@ -131,6 +133,7 @@ export class Gossip {
     this.connDB = new ConnDB({path: this.config.path, writeTimeout: 10e3});
     this.connHub = new ConnHub(this.ssb);
     this.connStaging = new ConnStaging(this.connHub);
+    this.connQuery = new ConnQuery(this.connDB, this.connHub, this.connStaging);
 
     this.setupStatusHook();
     this.setupCloseHook();
@@ -538,4 +541,7 @@ export class Gossip {
 
   @muxrpc('sync')
   public staging = () => this.connStaging;
+
+  @muxrpc('sync')
+  public query = () => this.connQuery;
 }

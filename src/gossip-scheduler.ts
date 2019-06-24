@@ -1,16 +1,16 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
-import ConnStaging = require('ssb-conn-staging');
-import {Peer} from './types';
 import {Msg} from 'ssb-typescript';
 import {plugin, muxrpc} from 'secret-stack-decorators';
+import {ConnQuery, Peer} from './query';
 const pull = require('pull-stream');
 const ip = require('ip');
 const onWakeup = require('on-wakeup');
 const onNetwork = require('on-change-network');
 const hasNetwork = require('./has-network-debounced');
 const ref = require('ssb-ref');
+require('zii');
 
 function noop() {}
 
@@ -24,23 +24,9 @@ function and(...args: Array<any>) {
   return (value: any) => args.every((fn: Function) => fn.call(null, value));
 }
 
-function filterWithExpBackoff(opts: any, ts?: number) {
-  const timestamp = ts || Date.now();
-  return (peer: Peer) => {
-    const prevAttempt = peer.stateChange! | 0;
-    const F = peer.failure! | 0;
-    const Q = opts.backoffStep;
-    const M = opts.backoffMax;
-    const expBackoff = Math.min(Math.pow(2, F) * Q, M || Infinity);
-    const nextAttempt = prevAttempt + expBackoff;
-    return nextAttempt < timestamp;
-  };
-}
-
 //detect if not connected to wifi or other network
 //(i.e. if there is only localhost)
-
-function isOffline(p: Peer) {
+function isOffline(p: any /* Peer */) {
   if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
   else if (p.source === 'bt') return false;
   else return !hasNetwork();
@@ -48,59 +34,19 @@ function isOffline(p: Peer) {
 
 const canBeConnected = not(isOffline);
 
-function isLocal(p: Peer) {
+function isLocal(p: any): boolean {
   // don't rely on private ip address, because
   // cjdns creates fake private ip addresses.
   // ignore localhost addresses, because sometimes they get broadcast.
   return !ip.isLoopback(p.host) && ip.isPrivate(p.host) && p.source === 'local';
 }
 
-function isFriend(p: Peer) {
+function isFriend(p: Peer): boolean {
   return p.source === 'friends';
 }
 
-function isUnattempted(p: Peer) {
-  return !p.stateChange;
-}
-
-//select peers which have never been successfully connected to yet,
-//but have been tried.
-function isInactive(p: Peer) {
-  return p.stateChange && (!p.duration || p.duration.mean == 0);
-}
-
-function isLongterm(p: Peer) {
-  return p.ping && p.ping.rtt && p.ping.rtt.mean > 0;
-}
-
-//peers which we can connect to, but are not upgraded.
-//select peers which we can connect to, but are not upgraded to LT.
-//assume any peer is legacy, until we know otherwise...
-function isLegacy(peer: Peer) {
-  return (
-    peer.duration &&
-    (peer.duration && peer.duration.mean > 0) &&
-    !isLongterm(peer)
-  );
-}
-
-// Sort from oldest to newest
-function sortByOldestStateChange(peers: Array<Peer>) {
-  return peers.sort((a, b) => a.stateChange! - b.stateChange!);
-}
-
-// Take the first n elements
-function take<T>(arr: Array<T>, n: number) {
-  return arr.slice(0, Math.max(n, 0));
-}
-
-function convertModeToLegacySource(
-  mode: 'lan' | 'bt' | 'internet',
-): Peer['source'] {
-  if (mode === 'lan') return 'local';
-  if (mode === 'bt') return 'bt';
-  if (mode === 'internet') return 'pub';
-  return 'manual';
+function take(n: number) {
+  return <T>(arr: Array<T>) => arr.slice(0, Math.max(n, 0));
 }
 
 const minute = 60e3;
@@ -112,10 +58,9 @@ export class GossipScheduler {
   private config: any;
   private db: ConnDB;
   private hub: ConnHub;
-  private staging: ConnStaging;
+  private query: ConnQuery;
   private closed: boolean;
   private lastMessageAt: number;
-  private updateTimestamp: number;
   private hasScheduledAnUpdate: boolean;
 
   constructor(ssb: any, config: any) {
@@ -123,10 +68,9 @@ export class GossipScheduler {
     this.config = config;
     this.db = this.ssb.gossip.db();
     this.hub = this.ssb.gossip.hub();
-    this.staging = this.ssb.gossip.staging();
+    this.query = this.ssb.gossip.query();
     this.closed = false;
     this.lastMessageAt = 0;
-    this.updateTimestamp = 0;
     this.hasScheduledAnUpdate = false;
 
     this.ssb.post((data: any) => {
@@ -148,86 +92,54 @@ export class GossipScheduler {
     return this.lastMessageAt && this.lastMessageAt > Date.now() - 500;
   }
 
-  private inConnection(p: Peer) {
-    const state = this.hub.getState(p.address!);
-    return state === 'connected' || state === 'connecting';
-  }
-
-  private selectConnectedExcess(peers: Array<Peer>, opts: any) {
-    const connectedPeers = peers.filter(this.inConnection);
-    const numConnected = connectedPeers.length;
-
-    if (numConnected > opts.quota * 2) {
-      const excess = numConnected - opts.quota;
-      return take(sortByOldestStateChange(connectedPeers), excess);
-    } else {
-      return [];
-    }
-  }
-
-  //opts: { quota, groupMin, min, backoffStep, max }
-  private selectDisconnected(peers: Array<Peer>, opts: any) {
-    const connectedPeers = peers.filter(this.inConnection);
-    const connectablePeers = peers.filter(
-      and(not(this.inConnection), canBeConnected),
+  //peers which we can connect to, but are not upgraded.
+  //select peers which we can connect to, but are not upgraded to LT.
+  //assume any peer is legacy, until we know otherwise...
+  private isLegacy(peer: Peer): boolean {
+    return (
+      this.query.hasSuccessfulAttempts(peer) && !this.query.hasPinged(peer)
     );
-
-    const newestStateChange = connectablePeers.reduce(
-      (M: number, peer: Peer) => Math.max(M, peer.stateChange || 0),
-      0,
-    );
-    const timeThreshold: number = newestStateChange + opts.groupMin;
-    if (this.updateTimestamp < timeThreshold) return [];
-
-    const count = Math.max(opts.quota - connectedPeers.length, 0);
-    const candidatesWithinTimeFrame = connectablePeers.filter(
-      filterWithExpBackoff(opts, this.updateTimestamp),
-    );
-    return take(sortByOldestStateChange(candidatesWithinTimeFrame), count);
   }
 
   // Utility to connect to bunch of peers, or disconnect if over quota
-  private updateTheseConnections(peers: Array<Peer>, opts: any) {
-    this.selectConnectedExcess(peers, opts).forEach(peer =>
-      this.hub.disconnect(peer.address!).then(noop, noop),
-    );
+  // opts: { quota, backoffStep, backoffMax, groupMin }
+  private updateTheseConnections(test: (p: Peer) => boolean, opts: any) {
+    const peersUp = this.query.peersInConnection().filter(test);
+    const peersDown = this.query.peersConnectable().filter(test);
+    const {quota, backoffStep, backoffMax, groupMin} = opts;
+    const excess = peersUp.length > quota * 2 ? peersUp.length - quota : 0;
+    const freeSlots = Math.max(quota - peersUp.length, 0);
 
-    this.selectDisconnected(peers, opts).forEach(peer =>
-      this.hub.connect(peer.address!).then(noop, noop),
-    );
+    // Disconnect from excess
+    peersUp
+      .z(this.query.sortByStateChange)
+      .z(take(excess))
+      .forEach(peer => this.hub.disconnect(peer.address!).then(noop, noop));
+
+    // Connect to suitable candidates
+    peersDown
+      .filter(canBeConnected)
+      .z(this.query.passesGroupDebounce(groupMin))
+      .filter(this.query.passesExpBackoff(backoffStep, backoffMax))
+      .z(this.query.sortByStateChange)
+      .z(take(freeSlots))
+      .forEach(peer => this.hub.connect(peer.address!).then(noop, noop));
   }
 
   private updateConnectionsNow() {
     // Respect some limits: don't attempt to connect while migration is running
     if (!this.ssb.ready() || this.isCurrentlyDownloading()) return;
 
-    this.updateTimestamp = Date.now();
+    const numOfConnectedRemoteNonFriends = this.query
+      .peersInConnection()
+      .filter(and(not(isLocal), not(isFriend))).length;
 
-    // The total database, from which to sample
-    const peers: Array<Peer> = ([] as Array<Peer>)
-      .concat(
-        Array.from(this.db.entries()).map(([address, data]) => ({
-          ...data,
-          address,
-        })),
-      )
-      .concat(
-        Array.from(this.staging.entries()).map(([address, data]) => ({
-          ...data,
-          address,
-          source: convertModeToLegacySource(data.mode) as Peer['source'],
-        })),
-      );
-
-    const numOfConnected = peers.filter(
-      and(this.inConnection, not(isLocal), not(isFriend)),
-    ).length;
-
-    const numOfConnectedFriends = peers.filter(and(this.inConnection, isFriend))
-      .length;
+    const numOfConnectedFriends = this.query
+      .peersInConnection()
+      .filter(isFriend).length;
 
     if (this.conf('friends', true))
-      this.updateTheseConnections(peers.filter(isFriend), {
+      this.updateTheseConnections(isFriend, {
         quota: 3,
         backoffStep: 2e3,
         backoffMax: 10 * minute,
@@ -235,7 +147,7 @@ export class GossipScheduler {
       });
 
     if (this.conf('seed', true))
-      this.updateTheseConnections(peers.filter(p => p.source === 'seed'), {
+      this.updateTheseConnections(p => p.source === 'seed', {
         quota: 3,
         backoffStep: 2e3,
         backoffMax: 10 * minute,
@@ -243,7 +155,7 @@ export class GossipScheduler {
       });
 
     if (this.conf('local', true))
-      this.updateTheseConnections(peers.filter(isLocal), {
+      this.updateTheseConnections(isLocal, {
         quota: 3,
         backoffStep: 2e3,
         backoffMax: 10 * minute,
@@ -252,7 +164,7 @@ export class GossipScheduler {
 
     if (this.conf('global', true)) {
       // prioritize friends
-      this.updateTheseConnections(peers.filter(and(isFriend, isLongterm)), {
+      this.updateTheseConnections(and(isFriend, this.query.hasPinged), {
         quota: 2,
         backoffStep: 10e3,
         backoffMax: 10 * minute,
@@ -260,27 +172,27 @@ export class GossipScheduler {
       });
 
       if (numOfConnectedFriends < 2) {
-        this.updateTheseConnections(
-          peers.filter(and(isFriend, isUnattempted)),
-          {
-            quota: 1,
-            backoffStep: 0,
-            backoffMax: 0,
-            groupMin: 0,
-          },
-        );
+        this.updateTheseConnections(and(isFriend, this.query.hasNoAttempts), {
+          quota: 1,
+          backoffStep: 0,
+          backoffMax: 0,
+          groupMin: 0,
+        });
       }
 
-      this.updateTheseConnections(peers.filter(and(isFriend, isInactive)), {
-        quota: 3,
-        backoffStep: minute,
-        backoffMax: 3 * hour,
-        groupMin: 5 * minute,
-      });
+      this.updateTheseConnections(
+        and(isFriend, this.query.hasOnlyFailedAttempts),
+        {
+          quota: 3,
+          backoffStep: minute,
+          backoffMax: 3 * hour,
+          groupMin: 5 * minute,
+        },
+      );
 
       // standard longterm peers
       this.updateTheseConnections(
-        peers.filter(and(isLongterm, not(isFriend), not(isLocal))),
+        and(this.query.hasPinged, not(isFriend), not(isLocal)),
         {
           quota: 2,
           backoffStep: 10e3,
@@ -289,8 +201,8 @@ export class GossipScheduler {
         },
       );
 
-      if (numOfConnected === 0) {
-        this.updateTheseConnections(peers.filter(isUnattempted), {
+      if (numOfConnectedRemoteNonFriends === 0) {
+        this.updateTheseConnections(this.query.hasNoAttempts, {
           quota: 1,
           backoffStep: 0,
           backoffMax: 0,
@@ -299,17 +211,18 @@ export class GossipScheduler {
       }
 
       //quota, groupMin, min, backoffStep, max
-      this.updateTheseConnections(peers.filter(isInactive), {
+      this.updateTheseConnections(this.query.hasOnlyFailedAttempts, {
         quota: 3,
         backoffStep: 5 * minute,
         backoffMax: 3 * hour,
         groupMin: 5 * 50e3,
       });
 
-      const longterm = peers.filter(this.inConnection).filter(isLongterm)
-        .length;
+      const longterm = this.query
+        .peersInConnection()
+        .filter(this.query.hasPinged).length;
 
-      this.updateTheseConnections(peers.filter(isLegacy), {
+      this.updateTheseConnections(this.isLegacy, {
         quota: 3 - longterm,
         backoffStep: 5 * minute,
         backoffMax: 3 * hour,
@@ -318,22 +231,20 @@ export class GossipScheduler {
     }
 
     // Purge some ongoing frustrating connection attempts
-    peers
-      .filter(this.inConnection)
+    this.query
+      .peersInConnection()
       .filter(p => {
-        const permanent = isLongterm(p) || isLocal(p);
+        const permanent = this.query.hasPinged(p) || isLocal(p);
         return !permanent || this.hub.getState(p.address!) === 'connecting';
       })
-      .filter(p => p.stateChange! + 10e3 < this.updateTimestamp)
-      .forEach(p => this.hub.disconnect(p.address!));
+      .filter(p => p.stateChange! + 10e3 < Date.now())
+      .forEach(p => this.hub.disconnect(p.address!).then(noop, noop));
   }
 
   private updateConnectionsSoon() {
     if (this.closed) return;
-
     if (this.hasScheduledAnUpdate) return;
-    else this.hasScheduledAnUpdate = true;
-
+    this.hasScheduledAnUpdate = true;
     // Add some time randomization to avoid deadlocks with remote peers
     const timer = setTimeout(() => {
       this.updateConnectionsNow();
