@@ -41,6 +41,13 @@ function isLocal(p: any): boolean {
   return !ip.isLoopback(p.host) && ip.isPrivate(p.host) && p.source === 'local';
 }
 
+//peers which we can connect to, but are not upgraded.
+//select peers which we can connect to, but are not upgraded to LT.
+//assume any peer is legacy, until we know otherwise...
+function isLegacy(peer: Peer): boolean {
+  return hasSuccessfulAttempts(peer) && !hasPinged(peer);
+}
+
 function isFriend(p: Peer): boolean {
   return p.source === 'friends';
 }
@@ -100,13 +107,6 @@ export class GossipScheduler {
   private isCurrentlyDownloading() {
     // don't schedule gossip if currently downloading messages
     return this.lastMessageAt && this.lastMessageAt > Date.now() - 500;
-  }
-
-  //peers which we can connect to, but are not upgraded.
-  //select peers which we can connect to, but are not upgraded to LT.
-  //assume any peer is legacy, until we know otherwise...
-  private isLegacy(peer: Peer): boolean {
-    return hasSuccessfulAttempts(peer) && !hasPinged(peer);
   }
 
   // Utility to connect to bunch of peers, or disconnect if over quota
@@ -222,7 +222,7 @@ export class GossipScheduler {
 
       const longterm = this.query.peersInConnection().filter(hasPinged).length;
 
-      this.updateTheseConnections(this.isLegacy, {
+      this.updateTheseConnections(isLegacy, {
         quota: 3 - longterm,
         backoffStep: 5 * minute,
         backoffMax: 3 * hour,
@@ -276,7 +276,7 @@ export class GossipScheduler {
     );
 
     // Upon regular time intervals, attempt to make connections
-    const int = setInterval(this.updateConnectionsSoon, 2e3);
+    const int = setInterval(() => this.updateConnectionsSoon(), 2e3);
     if (int.unref) int.unref();
 
     // Upon init, attempt to make some connections
