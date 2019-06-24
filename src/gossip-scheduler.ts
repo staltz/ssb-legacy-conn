@@ -49,6 +49,16 @@ function take(n: number) {
   return <T>(arr: Array<T>) => arr.slice(0, Math.max(n, 0));
 }
 
+const {
+  passesExpBackoff,
+  passesGroupDebounce,
+  hasNoAttempts,
+  hasOnlyFailedAttempts,
+  hasPinged,
+  hasSuccessfulAttempts,
+  sortByStateChange,
+} = ConnQuery;
+
 const minute = 60e3;
 const hour = 60 * 60e3;
 
@@ -96,9 +106,7 @@ export class GossipScheduler {
   //select peers which we can connect to, but are not upgraded to LT.
   //assume any peer is legacy, until we know otherwise...
   private isLegacy(peer: Peer): boolean {
-    return (
-      this.query.hasSuccessfulAttempts(peer) && !this.query.hasPinged(peer)
-    );
+    return hasSuccessfulAttempts(peer) && !hasPinged(peer);
   }
 
   // Utility to connect to bunch of peers, or disconnect if over quota
@@ -112,16 +120,16 @@ export class GossipScheduler {
 
     // Disconnect from excess
     peersUp
-      .z(this.query.sortByStateChange)
+      .z(sortByStateChange)
       .z(take(excess))
       .forEach(peer => this.hub.disconnect(peer.address!).then(noop, noop));
 
     // Connect to suitable candidates
     peersDown
       .filter(canBeConnected)
-      .z(this.query.passesGroupDebounce(groupMin))
-      .filter(this.query.passesExpBackoff(backoffStep, backoffMax))
-      .z(this.query.sortByStateChange)
+      .z(passesGroupDebounce(groupMin))
+      .filter(passesExpBackoff(backoffStep, backoffMax))
+      .z(sortByStateChange)
       .z(take(freeSlots))
       .forEach(peer => this.hub.connect(peer.address!).then(noop, noop));
   }
@@ -164,7 +172,7 @@ export class GossipScheduler {
 
     if (this.conf('global', true)) {
       // prioritize friends
-      this.updateTheseConnections(and(isFriend, this.query.hasPinged), {
+      this.updateTheseConnections(and(isFriend, hasPinged), {
         quota: 2,
         backoffStep: 10e3,
         backoffMax: 10 * minute,
@@ -172,7 +180,7 @@ export class GossipScheduler {
       });
 
       if (numOfConnectedFriends < 2) {
-        this.updateTheseConnections(and(isFriend, this.query.hasNoAttempts), {
+        this.updateTheseConnections(and(isFriend, hasNoAttempts), {
           quota: 1,
           backoffStep: 0,
           backoffMax: 0,
@@ -180,29 +188,23 @@ export class GossipScheduler {
         });
       }
 
-      this.updateTheseConnections(
-        and(isFriend, this.query.hasOnlyFailedAttempts),
-        {
-          quota: 3,
-          backoffStep: minute,
-          backoffMax: 3 * hour,
-          groupMin: 5 * minute,
-        },
-      );
+      this.updateTheseConnections(and(isFriend, hasOnlyFailedAttempts), {
+        quota: 3,
+        backoffStep: minute,
+        backoffMax: 3 * hour,
+        groupMin: 5 * minute,
+      });
 
       // standard longterm peers
-      this.updateTheseConnections(
-        and(this.query.hasPinged, not(isFriend), not(isLocal)),
-        {
-          quota: 2,
-          backoffStep: 10e3,
-          backoffMax: 10 * minute,
-          groupMin: 5e3,
-        },
-      );
+      this.updateTheseConnections(and(hasPinged, not(isFriend), not(isLocal)), {
+        quota: 2,
+        backoffStep: 10e3,
+        backoffMax: 10 * minute,
+        groupMin: 5e3,
+      });
 
       if (numOfConnectedRemoteNonFriends === 0) {
-        this.updateTheseConnections(this.query.hasNoAttempts, {
+        this.updateTheseConnections(hasNoAttempts, {
           quota: 1,
           backoffStep: 0,
           backoffMax: 0,
@@ -211,16 +213,14 @@ export class GossipScheduler {
       }
 
       //quota, groupMin, min, backoffStep, max
-      this.updateTheseConnections(this.query.hasOnlyFailedAttempts, {
+      this.updateTheseConnections(hasOnlyFailedAttempts, {
         quota: 3,
         backoffStep: 5 * minute,
         backoffMax: 3 * hour,
         groupMin: 5 * 50e3,
       });
 
-      const longterm = this.query
-        .peersInConnection()
-        .filter(this.query.hasPinged).length;
+      const longterm = this.query.peersInConnection().filter(hasPinged).length;
 
       this.updateTheseConnections(this.isLegacy, {
         quota: 3 - longterm,
@@ -234,7 +234,7 @@ export class GossipScheduler {
     this.query
       .peersInConnection()
       .filter(p => {
-        const permanent = this.query.hasPinged(p) || isLocal(p);
+        const permanent = hasPinged(p) || isLocal(p);
         return !permanent || this.hub.getState(p.address!) === 'connecting';
       })
       .filter(p => p.stateChange! + 10e3 < Date.now())

@@ -122,7 +122,7 @@ export class ConnQuery {
     return this.peersConnectable().concat(this.peersInConnection());
   }
 
-  public passesExpBackoff(
+  static passesExpBackoff(
     step: number,
     max: number,
     timestamp: number = Date.now(),
@@ -138,7 +138,7 @@ export class ConnQuery {
     };
   }
 
-  public passesGroupDebounce(groupMin: number, timestamp: number = Date.now()) {
+  static passesGroupDebounce(groupMin: number, timestamp: number = Date.now()) {
     return (group: Array<Peer>) => {
       const newestStateChange = group.reduce(
         (M: number, p: Peer) => Math.max(M, p.stateChange || 0),
@@ -153,7 +153,7 @@ export class ConnQuery {
   /**
    * Answers whether a peer has not had a connection attempt yet.
    */
-  public hasNoAttempts(p: Peer): boolean {
+  static hasNoAttempts(p: Peer): boolean {
     return !p.stateChange;
   }
 
@@ -161,28 +161,28 @@ export class ConnQuery {
    * Answers whether a peer has never been successfully connected to yet, but
    * has been tried.
    */
-  public hasOnlyFailedAttempts(p: Peer): boolean {
+  static hasOnlyFailedAttempts(p: Peer): boolean {
     return !!p.stateChange && (!p.duration || p.duration.mean == 0);
   }
 
   /**
    * Answers whether a peer has had some successful connection in the past.
    */
-  public hasSuccessfulAttempts(p: Peer): boolean {
+  static hasSuccessfulAttempts(p: Peer): boolean {
     return !!p.duration && p.duration.mean > 0;
   }
 
   /**
    * Answers whether a peer has successfully pinged us in the past.
    */
-  public hasPinged(p: Peer): boolean {
+  static hasPinged(p: Peer): boolean {
     return !!p.ping && !!p.ping.rtt && p.ping.rtt.mean > 0;
   }
 
   /**
    * Sorts peers from oldest 'stateChange' timestamp to newest.
    */
-  public sortByStateChange(peers: Array<Peer>) {
+  static sortByStateChange(peers: Array<Peer>) {
     return peers.sort((a, b) => a.stateChange! - b.stateChange!);
   }
 }
