@@ -113,7 +113,7 @@ export class GossipScheduler {
   // opts: { quota, backoffStep, backoffMax, groupMin }
   private updateTheseConnections(test: (p: Peer) => boolean, opts: any) {
     const peersUp = this.query.peersInConnection().filter(test);
-    const peersDown = this.query.peersConnectable().filter(test);
+    const peersDown = this.query.peersConnectable('dbAndStaging').filter(test);
     const {quota, backoffStep, backoffMax, groupMin} = opts;
     const excess = peersUp.length > quota * 2 ? peersUp.length - quota : 0;
     const freeSlots = Math.max(quota - peersUp.length, 0);
