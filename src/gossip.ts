@@ -169,6 +169,7 @@ export class Gossip {
       if (that.ssb.connScheduler) that.ssb.connScheduler.stop();
       that.connDB.close();
       that.connHub.close();
+      that.connStaging.close();
       return fn.apply(this, args);
     });
   }
