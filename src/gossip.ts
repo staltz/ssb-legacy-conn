@@ -1,15 +1,12 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
 import ConnStaging = require('ssb-conn-staging');
-import ConnQuery = require('ssb-conn-query');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import {Callback, Peer} from './types';
 import {plugin, muxrpc} from 'secret-stack-decorators';
 const pull = require('pull-stream');
 const Notify = require('pull-notify');
 const ref = require('ssb-ref');
-const ping = require('pull-ping');
-const stats = require('statistics');
 const fs = require('fs');
 const path = require('path');
 
@@ -115,14 +112,13 @@ function inferSource(address: string): Peer['source'] {
 @plugin('1.0.0')
 export class Gossip {
   public wakeup: number;
-  private ssb: any;
-  private config: any;
-  private status: Record<string, Peer>;
-  private notify: any;
-  private connDB: ConnDB;
-  private connHub: ConnHub;
-  private connStaging: ConnStaging;
-  private connQuery: ConnQuery;
+  private readonly ssb: any;
+  private readonly config: any;
+  private readonly status: Record<string, Peer>;
+  private readonly notify: any;
+  private readonly connDB: ConnDB;
+  private readonly connHub: ConnHub;
+  private readonly connStaging: ConnStaging;
 
   constructor(ssb: any, cfg: any) {
     this.ssb = ssb;
@@ -130,15 +126,13 @@ export class Gossip {
     this.wakeup = 0;
     this.status = {};
     this.notify = Notify();
-    this.connDB = new ConnDB({path: this.config.path, writeTimeout: 10e3});
-    this.connHub = new ConnHub(this.ssb);
-    this.connStaging = new ConnStaging(this.connHub);
-    this.connQuery = new ConnQuery(this.connDB, this.connHub, this.connStaging);
+    this.connDB = this.ssb.conn.internalConnDb();
+    this.connHub = this.ssb.conn.internalConnHub();
+    this.connStaging = this.ssb.conn.internalConnStaging();
 
     this.setupStatusHook();
-    this.setupCloseHook();
     this.setupConnectionListeners();
-    this.setupInitialization();
+    this.ssb.conn.start();
   }
 
   /**
@@ -163,17 +157,6 @@ export class Gossip {
     });
   }
 
-  private setupCloseHook() {
-    const that = this;
-    this.ssb.close.hook(function(this: any, fn: Function, args: Array<any>) {
-      if (that.ssb.connScheduler) that.ssb.connScheduler.stop();
-      that.connDB.close();
-      that.connHub.close();
-      that.connStaging.close();
-      return fn.apply(this, args);
-    });
-  }
-
   private setupConnectionListeners() {
     pull(
       this.connHub.listen(),
@@ -186,26 +169,6 @@ export class Gossip {
         if (ev.type === 'disconnected') this.onDisconnected(ev);
       }),
     );
-  }
-
-  private setupInitialization() {
-    this.connDB.loaded().then(() => {
-      if (this.ssb.connScheduler) {
-        this.ssb.connScheduler.start();
-      } else {
-        // Maybe this is a race condition, so let's wait a bit more
-        setTimeout(() => {
-          if (this.ssb.connScheduler) {
-            this.ssb.connScheduler.start();
-          } else {
-            console.error(
-              'There is no ConnScheduler! ' +
-                'The CONN plugin will remain in manual mode.',
-            );
-          }
-        }, 100);
-      }
-    });
   }
 
   // Only used by enable/disable
@@ -225,36 +188,11 @@ export class Gossip {
     fs.writeFileSync(cfgPath, JSON.stringify(configInFS, null, 2), 'utf-8');
   }
 
-  private setupPing(address: string, rpc: any) {
-    const PING_TIMEOUT = 5 * 6e4; // 5 minutes
-    const pp = ping({serve: true, timeout: PING_TIMEOUT}, () => {});
-    this.connDB.update(address, {ping: {rtt: pp.rtt, skew: pp.skew}});
-    pull(
-      pp,
-      rpc.gossip.ping({timeout: PING_TIMEOUT}, (err: any) => {
-        if (err && err.name === 'TypeError') {
-          this.connDB.update(address, (prev: any) => ({
-            ping: {...(prev.ping || {}), fail: true},
-          }));
-        }
-      }),
-      pp,
-    );
-  }
-
   private onConnecting(ev: HubEvent) {
-    this.connDB.update(ev.address, {
-      stateChange: Date.now(),
-    });
     this.ssb.emit('log:info', ['ssb-server', ev.address, 'CONNECTING']);
   }
 
   private onConnectingFailed(ev: HubEvent) {
-    this.connDB.update(ev.address, (prev: any) => ({
-      failure: (prev.failure || 0) + 1,
-      stateChange: Date.now(),
-      duration: stats(prev.duration, 0),
-    }));
     const peer = {
       state: ev.type,
       address: ev.address,
@@ -267,10 +205,6 @@ export class Gossip {
   }
 
   private onConnected(ev: HubEvent) {
-    this.connDB.update(ev.address, {
-      stateChange: Date.now(),
-      failure: 0,
-    });
     const peer = {
       state: ev.type,
       address: ev.address,
@@ -283,13 +217,10 @@ export class Gossip {
     }
     this.ssb.emit('log:info', ['ssb-server', ev.address, 'PEER JOINED']);
     this.notify({type: 'connect', peer});
-    if (ev.details.isClient) this.setupPing(ev.address, ev.details.rpc);
   }
 
-  private onDisconnecting(ev: HubEvent) {
-    this.connDB.update(ev.address, {
-      stateChange: Date.now(),
-    });
+  private onDisconnecting(_ev: HubEvent) {
+    // Already handled by CONN
   }
 
   private onDisconnectingFailed(_ev: HubEvent) {
@@ -297,10 +228,6 @@ export class Gossip {
   }
 
   private onDisconnected(ev: HubEvent) {
-    this.connDB.update(ev.address, (prev: any) => ({
-      stateChange: Date.now(),
-      duration: stats(prev.duration, Date.now() - prev.stateChange),
-    }));
     const peer = {
       state: ev.type,
       address: ev.address,
@@ -394,9 +321,7 @@ export class Gossip {
 
     this.add(addressString, 'manual');
 
-    this.connHub
-      .connect(addressString)
-      .then(result => cb && cb(null, result), err => cb && cb(err));
+    this.ssb.conn.connect(addressString, cb);
   };
 
   @muxrpc('async')
@@ -409,9 +334,7 @@ export class Gossip {
       return cb(err);
     }
 
-    this.connHub
-      .disconnect(addressString)
-      .then(() => cb && cb(), err => cb && cb(err));
+    this.ssb.conn.disconnect(addressString, cb);
   };
 
   @muxrpc('source')
@@ -494,12 +417,7 @@ export class Gossip {
   };
 
   @muxrpc('duplex', {anonymous: 'allow'})
-  public ping = () => {
-    let timeout = (this.config.timers && this.config.timers.ping) || 5 * 60e3;
-    //between 10 seconds and 30 minutes, default 5 min
-    timeout = Math.max(10e3, Math.min(timeout, 30 * 60e3));
-    return ping({timeout});
-  };
+  public ping = () => this.ssb.conn.ping();
 
   @muxrpc('sync')
   public reconnect = () => {
@@ -531,16 +449,4 @@ export class Gossip {
     this.setConfig(actualType, false);
     return 'disabled gossip type ' + actualType;
   };
-
-  @muxrpc('sync')
-  public db = () => this.connDB;
-
-  @muxrpc('sync')
-  public hub = () => this.connHub;
-
-  @muxrpc('sync')
-  public staging = () => this.connStaging;
-
-  @muxrpc('sync')
-  public query = () => this.connQuery;
 }

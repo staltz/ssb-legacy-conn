@@ -84,10 +84,10 @@ export class ConnScheduler {
   constructor(ssb: any, config: any) {
     this.ssb = ssb;
     this.config = config;
-    this.db = this.ssb.gossip.db();
-    this.hub = this.ssb.gossip.hub();
-    this.query = this.ssb.gossip.query();
-    this.closed = false;
+    this.db = this.ssb.conn.internalConnDb();
+    this.hub = this.ssb.conn.internalConnHub();
+    this.query = this.ssb.conn.internalConnQuery();
+    this.closed = true;
     this.lastMessageAt = 0;
     this.hasScheduledAnUpdate = false;
 
@@ -256,6 +256,9 @@ export class ConnScheduler {
 
   @muxrpc('sync')
   public start = () => {
+    if (!this.closed) return;
+    this.closed = false;
+
     // Upon wakeup, trigger hard reconnect
     onWakeup(() => this.hub.reset());
 
