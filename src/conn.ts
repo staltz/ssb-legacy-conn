@@ -94,8 +94,8 @@ export class CONN {
     this.connDB.update(ev.address, {stateChange: Date.now()});
   }
 
-  private onDisconnectingFailed(_ev: HubEvent) {
-    // ssb-gossip does not handle this case
+  private onDisconnectingFailed(ev: HubEvent) {
+    this.connDB.update(ev.address, {stateChange: Date.now()});
   }
 
   private onDisconnected(ev: HubEvent) {
