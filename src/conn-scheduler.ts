@@ -71,7 +71,7 @@ const minute = 60e3;
 const hour = 60 * 60e3;
 
 @plugin('1.0.0')
-export class GossipScheduler {
+export class ConnScheduler {
   private ssb: any;
   private config: any;
   private db: ConnDB;

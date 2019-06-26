@@ -1,4 +1,4 @@
 import {Gossip} from './gossip';
-import {GossipScheduler} from './gossip-scheduler';
+import {ConnScheduler} from './conn-scheduler';
 
-module.exports = [Gossip, GossipScheduler];
+module.exports = [Gossip, ConnScheduler];

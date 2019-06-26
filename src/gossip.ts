@@ -166,7 +166,7 @@ export class Gossip {
   private setupCloseHook() {
     const that = this;
     this.ssb.close.hook(function(this: any, fn: Function, args: Array<any>) {
-      if (that.ssb.gossipScheduler) that.ssb.gossipScheduler.stop();
+      if (that.ssb.connScheduler) that.ssb.connScheduler.stop();
       that.connDB.close();
       that.connHub.close();
       return fn.apply(this, args);
@@ -189,17 +189,17 @@ export class Gossip {
 
   private setupInitialization() {
     this.connDB.loaded().then(() => {
-      if (this.ssb.gossipScheduler) {
-        this.ssb.gossipScheduler.start();
+      if (this.ssb.connScheduler) {
+        this.ssb.connScheduler.start();
       } else {
         // Maybe this is a race condition, so let's wait a bit more
         setTimeout(() => {
-          if (this.ssb.gossipScheduler) {
-            this.ssb.gossipScheduler.start();
+          if (this.ssb.connScheduler) {
+            this.ssb.connScheduler.start();
           } else {
             console.error(
-              'There is no gossip scheduler! ' +
-                'The gossip plugin will remain in manual mode.',
+              'There is no ConnScheduler! ' +
+                'The CONN plugin will remain in manual mode.',
             );
           }
         }, 100);
