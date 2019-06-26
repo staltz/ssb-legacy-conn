@@ -155,7 +155,7 @@ export class Gossip {
         const state = connHub.getState(address);
         if (state === 'connected' || data.stateChange! + 3e3 > Date.now()) {
           if (data.key) {
-            status[data.key] = simplifyPeerForStatus({...data, state});
+            status[data.key] = simplifyPeerForStatus({...(data as any), state});
           }
         }
       }
@@ -275,7 +275,7 @@ export class Gossip {
       address: ev.address,
       key: ev.key,
       ...this.connDB.get(ev.address),
-    };
+    } as Peer;
     if (!this.connDB.has(ev.address)) peer.source = inferSource(ev.address);
     if (ev.key) {
       this.status[ev.key] = simplifyPeerForStatus(peer);
@@ -305,7 +305,7 @@ export class Gossip {
       address: ev.address,
       key: ev.key,
       ...this.connDB.get(ev.address),
-    };
+    } as Peer;
     if (ev.key) {
       delete this.status[ev.key];
     }
@@ -373,11 +373,10 @@ export class Gossip {
     const peer = this.connDB.get(addressString);
     if (!peer) return undefined;
     else {
-      const [address, data] = peer;
       return {
-        ...data,
-        address,
-        state: this.connHub.getState(address),
+        address: addressString,
+        state: this.connHub.getState(addressString),
+        ...peer,
       };
     }
   };
@@ -455,7 +454,6 @@ export class Gossip {
         address: addressString,
         source: source,
         announcers: 1,
-        duration: 0,
       });
       this.notify({
         type: 'discover',
