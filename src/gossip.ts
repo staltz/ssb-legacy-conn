@@ -1,10 +1,10 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
 import ConnStaging = require('ssb-conn-staging');
+import ConnQuery = require('ssb-conn-query');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
 import {Callback, Peer} from './types';
 import {plugin, muxrpc} from 'secret-stack-decorators';
-import {ConnQuery} from './query';
 const pull = require('pull-stream');
 const Notify = require('pull-notify');
 const ref = require('ssb-ref');

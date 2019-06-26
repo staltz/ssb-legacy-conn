@@ -1,9 +1,10 @@
 import ConnDB = require('ssb-conn-db');
 import ConnHub = require('ssb-conn-hub');
+import ConnQuery = require('ssb-conn-query');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
+import {Peer} from 'ssb-conn-query/lib/types';
 import {Msg} from 'ssb-typescript';
 import {plugin, muxrpc} from 'secret-stack-decorators';
-import {ConnQuery, Peer} from './query';
 const pull = require('pull-stream');
 const ip = require('ip');
 const onWakeup = require('on-wakeup');

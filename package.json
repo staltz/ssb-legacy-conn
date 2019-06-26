@@ -21,6 +21,7 @@
     "ssb-conn-db": "0.1.0",
     "ssb-conn-hub": "0.0.4",
     "ssb-conn-staging": "0.0.1",
+    "ssb-conn-query": "0.0.1",
     "secret-stack-decorators": "1.0.0",
     "ssb-ref": "^2.13.9",
     "ssb-typescript": "^1.4.0",
