@@ -349,7 +349,7 @@ export class Gossip {
 
     if (source === 'local') {
       this.connStaging.stage(addressString, {
-        mode: 'lan',
+        type: 'lan',
         host: parsed.host,
         port: parsed.port,
         key: parsed.key,

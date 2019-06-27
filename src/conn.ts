@@ -3,6 +3,7 @@ import ConnHub = require('ssb-conn-hub');
 import ConnStaging = require('ssb-conn-staging');
 import ConnQuery = require('ssb-conn-query');
 import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
+import {StagedData} from 'ssb-conn-staging/lib/types';
 import {plugin, muxrpc} from 'secret-stack-decorators';
 import {Callback} from './types';
 const pull = require('pull-stream');
@@ -186,6 +187,16 @@ export class CONN {
     this.connHub
       .disconnect(address)
       .then(result => cb && cb(null, result), err => cb && cb(err));
+  };
+
+  @muxrpc('sync')
+  public stage = (address: string, type: StagedData['type'] = 'internet') => {
+    return this.connStaging.stage(address, {type, address});
+  };
+
+  @muxrpc('sync')
+  public unstage = (address: string) => {
+    return this.connStaging.unstage(address);
   };
 
   @muxrpc('sync')
