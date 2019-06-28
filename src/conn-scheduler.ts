@@ -9,7 +9,7 @@ const pull = require('pull-stream');
 const ip = require('ip');
 const onWakeup = require('on-wakeup');
 const onNetwork = require('on-change-network');
-const hasNetwork = require('./has-network-debounced');
+const hasNetwork = require('has-network');
 const ref = require('ssb-ref');
 require('zii');
 
@@ -25,12 +25,22 @@ function and(...args: Array<any>) {
   return (value: any) => args.every((fn: Function) => fn.call(null, value));
 }
 
+let lastCheck = 0;
+let lastValue: any = null;
+function hasNetworkDebounced() {
+  if (lastCheck + 1e3 < Date.now()) {
+    lastCheck = Date.now();
+    lastValue = hasNetwork();
+  }
+  return lastValue;
+}
+
 //detect if not connected to wifi or other network
 //(i.e. if there is only localhost)
 function isOffline(p: any /* Peer */) {
   if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
   else if (p.source === 'bt') return false;
-  else return !hasNetwork();
+  else return !hasNetworkDebounced();
 }
 
 const canBeConnected = not(isOffline);
