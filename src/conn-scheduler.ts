@@ -350,6 +350,7 @@ export class ConnScheduler {
 
   @muxrpc('sync')
   public stop = () => {
+    this.hub.reset();
     this.closed = true;
   };
 }
