@@ -162,7 +162,17 @@ export class CONN {
   //#region PUBLIC MUXRPC
 
   @muxrpc('async')
-  public connect = (address: string, cb: Callback<any>) => {
+  public connect = (
+    address: string,
+    second: Record<string, any> | null | undefined | Callback<any>,
+    third?: Callback<any>,
+  ) => {
+    if (typeof second === 'function' && typeof third === 'function') {
+      throw new Error('CONN.connect() received incorrect arguments');
+    }
+    const cb = (typeof third === 'function' ? third : second) as Callback<any>;
+    const data = (typeof third === 'function' ? second : undefined) as any;
+
     try {
       this.assertValidAddress(address);
     } catch (err) {
@@ -171,7 +181,7 @@ export class CONN {
     }
 
     this.connHub
-      .connect(address)
+      .connect(address, data)
       .then(result => cb && cb(null, result), err => cb && cb(err));
   };
 
@@ -190,8 +200,8 @@ export class CONN {
   };
 
   @muxrpc('sync')
-  public stage = (address: string, type: StagedData['type'] = 'internet') => {
-    return this.connStaging.stage(address, {type, address});
+  public stage = (address: string, data: StagedData = {type: 'internet'}) => {
+    return this.connStaging.stage(address, data);
   };
 
   @muxrpc('sync')

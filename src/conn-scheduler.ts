@@ -142,7 +142,7 @@ export class ConnScheduler {
       .filter(passesExpBackoff(backoffStep, backoffMax))
       .z(sortByStateChange)
       .z(take(freeSlots))
-      .forEach(peer => this.hub.connect(peer.address!).then(noop, noop));
+      .forEach(peer => this.hub.connect(peer.address!, peer).then(noop, noop));
   }
 
   private updateConnectionsNow() {
