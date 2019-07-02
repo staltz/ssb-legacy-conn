@@ -39,9 +39,11 @@ function hasNetworkDebounced() {
 //(i.e. if there is only localhost)
 function isOffline(p: Peer) {
   if (ip.isLoopback(p[1].host) || p[1].host == 'localhost') return false;
-  else if (p[1].source === 'bt') return false;
-  else if (p[1].type === 'bt') return false;
   else return !hasNetworkDebounced();
+}
+
+function notBluetooth(p: Peer) {
+  return !p[0].startsWith('bt:');
 }
 
 const canBeConnected = not(isOffline);
@@ -136,12 +138,14 @@ export class ConnScheduler {
 
     // Disconnect from excess
     peersUp
+      .filter(notBluetooth)
       .z(sortByStateChange)
       .z(take(excess))
       .forEach(([addr]) => this.hub.disconnect(addr).then(noop, noop));
 
     // Connect to suitable candidates
     peersDown
+      .filter(notBluetooth)
       .filter(canBeConnected)
       .z(passesGroupDebounce(groupMin))
       .filter(passesExpBackoff(backoffStep, backoffMax))
