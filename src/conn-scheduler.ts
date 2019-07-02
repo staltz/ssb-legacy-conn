@@ -37,19 +37,24 @@ function hasNetworkDebounced() {
 
 //detect if not connected to wifi or other network
 //(i.e. if there is only localhost)
-function isOffline(p: any /* Peer */) {
-  if (ip.isLoopback(p.host) || p.host == 'localhost') return false;
-  else if (p.source === 'bt') return false;
+function isOffline(p: Peer) {
+  if (ip.isLoopback(p[1].host) || p[1].host == 'localhost') return false;
+  else if (p[1].source === 'bt') return false;
+  else if (p[1].type === 'bt') return false;
   else return !hasNetworkDebounced();
 }
 
 const canBeConnected = not(isOffline);
 
-function isLocal(p: any): boolean {
+function isLocal(p: Peer): boolean {
   // don't rely on private ip address, because
   // cjdns creates fake private ip addresses.
   // ignore localhost addresses, because sometimes they get broadcast.
-  return !ip.isLoopback(p.host) && ip.isPrivate(p.host) && p.source === 'local';
+  return (
+    !ip.isLoopback(p[1].host) &&
+    ip.isPrivate(p[1].host) &&
+    (p[1].source === 'local' || p[1].type === 'lan')
+  );
 }
 
 //peers which we can connect to, but are not upgraded.
@@ -60,7 +65,7 @@ function isLegacy(peer: Peer): boolean {
 }
 
 function isFriend(p: Peer): boolean {
-  return p.source === 'friends';
+  return p[1].source === 'friends';
 }
 
 function take(n: number) {
@@ -101,8 +106,8 @@ export class ConnScheduler {
     this.lastMessageAt = 0;
     this.hasScheduledAnUpdate = false;
 
-    this.ssb.post((data: any) => {
-      if (data.value.author != this.ssb.id) {
+    this.ssb.post((msg: Msg) => {
+      if (msg.value.author != this.ssb.id) {
         this.lastMessageAt = Date.now();
       }
     });
@@ -133,7 +138,7 @@ export class ConnScheduler {
     peersUp
       .z(sortByStateChange)
       .z(take(excess))
-      .forEach(peer => this.hub.disconnect(peer.address!).then(noop, noop));
+      .forEach(([addr]) => this.hub.disconnect(addr).then(noop, noop));
 
     // Connect to suitable candidates
     peersDown
@@ -142,7 +147,7 @@ export class ConnScheduler {
       .filter(passesExpBackoff(backoffStep, backoffMax))
       .z(sortByStateChange)
       .z(take(freeSlots))
-      .forEach(peer => this.hub.connect(peer.address!, peer).then(noop, noop));
+      .forEach(([addr, peer]) => this.hub.connect(addr, peer).then(noop, noop));
   }
 
   private updateConnectionsNow() {
@@ -166,7 +171,7 @@ export class ConnScheduler {
       });
 
     if (this.conf('seed', true))
-      this.updateTheseConnections(p => p.source === 'seed', {
+      this.updateTheseConnections(p => p[1].source === 'seed', {
         quota: 3,
         backoffStep: 2e3,
         backoffMax: 10 * minute,
@@ -244,12 +249,12 @@ export class ConnScheduler {
     // Purge some ongoing frustrating connection attempts
     this.query
       .peersInConnection()
-      .filter(p => {
-        const permanent = hasPinged(p) || isLocal(p);
-        return !permanent || this.hub.getState(p.address!) === 'connecting';
+      .filter(peer => {
+        const permanent = hasPinged(peer) || isLocal(peer);
+        return !permanent || this.hub.getState(peer[0]) === 'connecting';
       })
-      .filter(p => p.stateChange! + 10e3 < Date.now())
-      .forEach(p => this.hub.disconnect(p.address!).then(noop, noop));
+      .filter(peer => peer[1].stateChange! + 10e3 < Date.now())
+      .forEach(([addr]) => this.hub.disconnect(addr).then(noop, noop));
   }
 
   private updateConnectionsSoon() {
