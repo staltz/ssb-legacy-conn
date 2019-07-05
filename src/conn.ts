@@ -200,7 +200,10 @@ export class CONN {
   };
 
   @muxrpc('sync')
-  public stage = (address: string, data: StagedData = {type: 'internet'}) => {
+  public stage = (
+    address: string,
+    data: Partial<StagedData> = {type: 'internet'},
+  ) => {
     return this.connStaging.stage(address, data);
   };
 
