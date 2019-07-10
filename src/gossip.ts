@@ -1,7 +1,6 @@
-import ConnDB = require('ssb-conn-db');
-import ConnHub = require('ssb-conn-hub');
-import ConnStaging = require('ssb-conn-staging');
-import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
+import {ConnDB} from 'ssb-conn/lib/types/db';
+import {ConnHub, ListenEvent as HubEvent} from 'ssb-conn/lib/types/hub';
+import {ConnStaging} from 'ssb-conn/lib/types/staging';
 import {Callback, Peer} from './types';
 import {plugin, muxrpc} from 'secret-stack-decorators';
 const pull = require('pull-stream');
@@ -126,7 +125,7 @@ export class Gossip {
     this.wakeup = 0;
     this.status = {};
     this.notify = Notify();
-    this.connDB = this.ssb.conn.internalConnDb();
+    this.connDB = this.ssb.conn.internalConnDB();
     this.connHub = this.ssb.conn.internalConnHub();
     this.connStaging = this.ssb.conn.internalConnStaging();
 

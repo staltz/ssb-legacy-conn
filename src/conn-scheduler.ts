@@ -1,8 +1,6 @@
-import ConnDB = require('ssb-conn-db');
-import ConnHub = require('ssb-conn-hub');
-import ConnQuery = require('ssb-conn-query');
-import {ListenEvent as HubEvent} from 'ssb-conn-hub/lib/types';
-import {Peer} from 'ssb-conn-query/lib/types';
+import {CONN} from 'ssb-conn/lib/conn';
+import {ConnHub, ListenEvent as HubEvent} from 'ssb-conn/lib/types/hub';
+import {ConnQuery, Peer} from 'ssb-conn/lib/types/query';
 import {Msg} from 'ssb-typescript';
 import {plugin, muxrpc} from 'secret-stack-decorators';
 const pull = require('pull-stream');
@@ -91,9 +89,8 @@ const hour = 60 * 60e3;
 export class ConnScheduler {
   private ssb: any;
   private config: any;
-  private db: ConnDB;
+  private conn: CONN;
   private hub: ConnHub;
-  private query: ConnQuery;
   private closed: boolean;
   private lastMessageAt: number;
   private hasScheduledAnUpdate: boolean;
@@ -101,9 +98,8 @@ export class ConnScheduler {
   constructor(ssb: any, config: any) {
     this.ssb = ssb;
     this.config = config;
-    this.db = this.ssb.conn.internalConnDb();
+    this.conn = this.ssb.conn;
     this.hub = this.ssb.conn.internalConnHub();
-    this.query = this.ssb.conn.internalConnQuery();
     this.closed = true;
     this.lastMessageAt = 0;
     this.hasScheduledAnUpdate = false;
@@ -130,8 +126,9 @@ export class ConnScheduler {
   // Utility to connect to bunch of peers, or disconnect if over quota
   // opts: { quota, backoffStep, backoffMax, groupMin }
   private updateTheseConnections(test: (p: Peer) => boolean, opts: any) {
-    const peersUp = this.query.peersInConnection().filter(test);
-    const peersDown = this.query.peersConnectable('dbAndStaging').filter(test);
+    const query = this.conn.query();
+    const peersUp = query.peersInConnection().filter(test);
+    const peersDown = query.peersConnectable('dbAndStaging').filter(test);
     const {quota, backoffStep, backoffMax, groupMin} = opts;
     const excess = peersUp.length > quota * 2 ? peersUp.length - quota : 0;
     const freeSlots = Math.max(quota - peersUp.length, 0);
@@ -158,11 +155,13 @@ export class ConnScheduler {
     // Respect some limits: don't attempt to connect while migration is running
     if (!this.ssb.ready() || this.isCurrentlyDownloading()) return;
 
-    const numOfConnectedRemoteNonFriends = this.query
+    const numOfConnectedRemoteNonFriends = this.conn
+      .query()
       .peersInConnection()
       .filter(and(not(isLocal), not(isFriend))).length;
 
-    const numOfConnectedFriends = this.query
+    const numOfConnectedFriends = this.conn
+      .query()
       .peersInConnection()
       .filter(isFriend).length;
 
@@ -240,7 +239,10 @@ export class ConnScheduler {
         groupMin: 5 * 50e3,
       });
 
-      const longterm = this.query.peersInConnection().filter(hasPinged).length;
+      const longterm = this.conn
+        .query()
+        .peersInConnection()
+        .filter(hasPinged).length;
 
       this.updateTheseConnections(isLegacy, {
         quota: 3 - longterm,
@@ -251,7 +253,8 @@ export class ConnScheduler {
     }
 
     // Purge some ongoing frustrating connection attempts
-    this.query
+    this.conn
+      .query()
       .peersInConnection()
       .filter(peer => {
         const permanent = hasPinged(peer) || isLocal(peer);
@@ -348,7 +351,7 @@ export class ConnScheduler {
     }
 
     // Upon init, populate gossip table from the database
-    for (let [address, data] of this.db.entries()) {
+    for (let [address, data] of this.conn.dbPeers()) {
       if (data.source === 'dht') {
         this.ssb.gossip.add(address, 'dht');
       } else if (data.source !== 'local' && data.source !== 'bt') {
