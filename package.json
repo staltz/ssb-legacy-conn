@@ -1,7 +1,7 @@
 {
   "name": "ssb-legacy-conn",
   "description": "Legacy SSB plugin for connections, also known as gossip plugin",
-  "version": "1.0.26-rc13",
+  "version": "2.0.0",
   "homepage": "https://github.com/staltz/ssb-legacy-conn",
   "main": "lib/index.js",
   "repository": {
